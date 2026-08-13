@@ -1,0 +1,6 @@
+{
+  "name": "THE PUFF CO. - Smart POS & KOT",
+  "description": "Real-time PWA POS, KOT kitchen screen, inventory auto-deduction, and sales reporting system for THE PUFF CO.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

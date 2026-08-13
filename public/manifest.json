@@ -1,0 +1,19 @@
+{
+  "short_name": "THE PUFF CO",
+  "name": "THE PUFF COMPANY - POS & KOT System",
+  "description": "Real-time POS, KOT Display, Inventory, & Analytics for THE PUFF COMPANY",
+  "icons": [
+    {
+      "src": "/puff-icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192 512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#fff7ed",
+  "theme_color": "#ea580c",
+  "display": "standalone",
+  "orientation": "any",
+  "categories": ["business", "food", "point-of-sale"]
+}

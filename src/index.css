@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+@theme {
+  --color-oatmeal: #f4efe8;
+  --color-oatmeal-light: #faf7f2;
+  --color-oatmeal-dark: #e8ded2;
+
+  --color-clay: #e2d7c9;
+  --color-clay-light: #ece3d8;
+  --color-clay-dark: #d6c6b3;
+
+  --color-stone-taupe: #a19284;
+  --color-stone-taupe-light: #b8a99c;
+  --color-stone-taupe-dark: #817366;
+
+  --color-rust: #8c3a27;
+  --color-rust-hover: #732f1f;
+  --color-rust-light: #f4e8e5;
+  --color-rust-dark: #5c2417;
+
+  --color-espresso: #2e211d;
+  --color-espresso-light: #44322d;
+  --color-espresso-dark: #1b1311;
+
+  --font-serif: "Playfair Display", "Cinzel", Georgia, serif;
+  --font-display: "Cinzel", "Playfair Display", Georgia, serif;
+  --font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+}
+
+/* Base custom scrollbar & transitions using Sienna Maison palette */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f4efe8;
+}
+::-webkit-scrollbar-thumb {
+  background: #a19284;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #8c3a27;
+}
+
+/* Custom Utilities for Sienna Maison design tokens */
+.bg-oatmeal { background-color: #f4efe8; }
+.bg-clay { background-color: #e2d7c9; }
+.bg-stone-taupe { background-color: #a19284; }
+.bg-rust { background-color: #8c3a27; }
+.bg-espresso { background-color: #2e211d; }
+
+.text-oatmeal { color: #f4efe8; }
+.text-clay { color: #e2d7c9; }
+.text-stone-taupe { color: #a19284; }
+.text-rust { color: #8c3a27; }
+.text-espresso { color: #2e211d; }
+
+.border-oatmeal { border-color: #f4efe8; }
+.border-clay { border-color: #e2d7c9; }
+.border-stone-taupe { border-color: #a19284; }
+.border-rust { border-color: #8c3a27; }
+.border-espresso { border-color: #2e211d; }

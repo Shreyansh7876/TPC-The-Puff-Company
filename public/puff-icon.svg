@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <!-- Background: Oatmeal Silk (#f4efe8) -->
+  <rect width="512" height="512" rx="96" fill="#f4efe8" />
+  
+  <!-- Outer subtle border ring in Stone Taupe (#a19284) -->
+  <rect x="16" y="16" width="480" height="480" rx="80" fill="none" stroke="#e2d7c9" stroke-width="6" />
+
+  <!-- Steam Lines -->
+  <path d="M236 100 Q230 80 236 65" fill="none" stroke="#8c3a27" stroke-width="4" stroke-linecap="round" />
+  <path d="M256 92 Q250 72 256 55" fill="none" stroke="#8c3a27" stroke-width="5" stroke-linecap="round" />
+  <path d="M276 100 Q270 80 276 65" fill="none" stroke="#8c3a27" stroke-width="4" stroke-linecap="round" />
+
+  <!-- Curved Arc Top Text Guidelines / Text Arc -->
+  <path id="textArc" d="M 100 135 A 180 180 0 0 1 412 135" fill="none" />
+  <text font-family="'Cinzel', 'Playfair Display', Georgia, serif" font-size="20" font-weight="700" fill="#2e211d" letter-spacing="4">
+    <textPath href="#textArc" startOffset="50%" text-anchor="middle">CRISPY • HOT • FRESH</textPath>
+  </text>
+
+  <!-- Side Curved Enclosing Arcs -->
+  <path d="M 96 160 A 180 180 0 0 0 80 310" fill="none" stroke="#2e211d" stroke-width="3" stroke-linecap="round" />
+  <circle cx="98" cy="150" r="5" fill="#2e211d" />
+  <path d="M 416 160 A 180 180 0 0 1 432 310" fill="none" stroke="#2e211d" stroke-width="3" stroke-linecap="round" />
+  <circle cx="414" cy="150" r="5" fill="#2e211d" />
+
+  <!-- Puff Pastry Drawing in Espresso Brown (#2e211d) -->
+  <g transform="translate(136, 120)">
+    <!-- Top crust curves -->
+    <path d="M 120 20 C 60 20, 20 60, 10 75 C 5 80, 2 90, 0 100 C 30 90, 80 85, 120 85 C 160 85, 210 90, 240 100 C 238 90, 235 80, 230 75 C 190 60, 180 20, 120 20 Z" fill="#e2d7c9" stroke="#2e211d" stroke-width="5" stroke-linejoin="round" />
+    
+    <!-- Crust Scores / Cuts -->
+    <path d="M 80 40 Q 100 50 115 48" fill="none" stroke="#8c3a27" stroke-width="4" stroke-linecap="round" />
+    <path d="M 115 32 Q 135 44 150 42" fill="none" stroke="#8c3a27" stroke-width="4" stroke-linecap="round" />
+    <path d="M 150 40 Q 170 52 185 50" fill="none" stroke="#8c3a27" stroke-width="4" stroke-linecap="round" />
+
+    <!-- Flaky Layers below -->
+    <path d="M 5 102 C 20 115, 60 135, 120 135 C 180 135, 220 115, 235 102" fill="none" stroke="#2e211d" stroke-width="4" stroke-linecap="round" />
+    <path d="M 12 118 C 30 130, 70 148, 120 148 C 170 148, 210 130, 228 118" fill="none" stroke="#8c3a27" stroke-width="4" stroke-linecap="round" />
+    <path d="M 22 132 C 40 145, 80 158, 120 158 C 160 158, 200 145, 218 132" fill="none" stroke="#2e211d" stroke-width="3" stroke-linecap="round" />
+  </g>
+
+  <!-- Title Section -->
+  <!-- "the" -->
+  <line x1="110" y1="305" x2="190" y2="305" stroke="#2e211d" stroke-width="2" />
+  <text x="256" y="312" font-family="'Playfair Display', Georgia, serif" font-size="28" font-style="italic" font-weight="600" fill="#2e211d" text-anchor="middle">the</text>
+  <line x1="322" y1="305" x2="402" y2="305" stroke="#2e211d" stroke-width="2" />
+
+  <!-- "PUFF" -->
+  <text x="256" y="400" font-family="'Playfair Display', Georgia, serif" font-size="92" font-weight="900" fill="#2e211d" text-anchor="middle" letter-spacing="12">PUFF</text>
+
+  <!-- "— COMPANY —" -->
+  <text x="256" y="445" font-family="'Cinzel', 'Playfair Display', sans-serif" font-size="24" font-weight="700" fill="#8c3a27" text-anchor="middle" letter-spacing="8">— COMPANY —</text>
+</svg>
