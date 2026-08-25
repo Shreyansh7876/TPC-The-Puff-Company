@@ -7,10 +7,13 @@ import {
   Utensils, 
   Flame, 
   AlertCircle,
-  BellRing
+  BellRing,
+  Ban,
+  RotateCcw
 } from 'lucide-react';
 import { Order, OrderStatus } from '../types';
 import { livePuffStore } from '../services/store';
+import { CancelOrderModal } from './CancelOrderModal';
 
 interface KOTDisplayProps {
   orders: Order[];
@@ -18,6 +21,7 @@ interface KOTDisplayProps {
 
 export const KOTDisplay: React.FC<KOTDisplayProps> = ({ orders }) => {
   const [filterStatus, setFilterStatus] = useState<string>('ACTIVE');
+  const [cancellingOrder, setCancellingOrder] = useState<Order | null>(null);
 
   useEffect(() => {
     const pendingCount = orders.filter((o) => o.status === 'PENDING').length;
@@ -65,6 +69,13 @@ export const KOTDisplay: React.FC<KOTDisplayProps> = ({ orders }) => {
           badge: 'bg-[#a19284] text-[#f4efe8]',
           title: 'COMPLETED',
         };
+      case 'CANCELLED':
+      case 'REFUNDED':
+        return {
+          border: 'border-red-300 bg-red-50/70',
+          badge: 'bg-red-700 text-white',
+          title: 'CANCELLED',
+        };
       default:
         return {
           border: 'border-[#a19284]/30 bg-white',
@@ -104,7 +115,7 @@ export const KOTDisplay: React.FC<KOTDisplayProps> = ({ orders }) => {
                 THE PUFF CO. — Kitchen KOT
               </h2>
               <span className="bg-[#8c3a27] text-[#f4efe8] text-xs font-bold px-2.5 py-0.5 rounded-md border border-[#f4efe8]/20">
-                {orders.filter((o) => o.status !== 'COMPLETED').length} ACTIVE
+                {orders.filter((o) => o.status !== 'COMPLETED' && o.status !== 'CANCELLED').length} ACTIVE
               </span>
             </div>
             <p className="text-xs text-[#e2d7c9] mt-0.5">
@@ -115,7 +126,7 @@ export const KOTDisplay: React.FC<KOTDisplayProps> = ({ orders }) => {
 
         {/* Status Filters */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
-          {['ACTIVE', 'PENDING', 'PREPARING', 'READY', 'COMPLETED'].map((st) => (
+          {['ACTIVE', 'PENDING', 'PREPARING', 'READY', 'COMPLETED', 'CANCELLED'].map((st) => (
             <button
               key={st}
               onClick={() => setFilterStatus(st)}
@@ -137,9 +148,13 @@ export const KOTDisplay: React.FC<KOTDisplayProps> = ({ orders }) => {
           <div className="w-16 h-16 bg-[#8c3a27]/10 text-[#8c3a27] rounded-full flex items-center justify-center mx-auto mb-3">
             <Utensils className="w-8 h-8" />
           </div>
-          <h3 className="text-lg font-['Playfair_Display'] font-bold text-[#2e211d]">No Orders in Kitchen Queue</h3>
+          <h3 className="text-lg font-['Playfair_Display'] font-bold text-[#2e211d]">
+            {filterStatus === 'CANCELLED' ? 'No Cancelled Orders' : 'No Orders in Kitchen Queue'}
+          </h3>
           <p className="text-xs text-[#a19284] mt-1 max-w-sm mx-auto">
-            When staff place orders on mobile or laptop counter POS, live KOT tickets will automatically appear here.
+            {filterStatus === 'CANCELLED' 
+              ? 'Cancelled orders will appear here for audit logging and kitchen tracking.'
+              : 'When staff place orders on mobile or laptop counter POS, live KOT tickets will automatically appear here.'}
           </p>
         </div>
       )}
@@ -149,7 +164,8 @@ export const KOTDisplay: React.FC<KOTDisplayProps> = ({ orders }) => {
         {filteredOrders.map((order) => {
           const style = getStatusStyle(order.status);
           const timeAgo = getTimeAgoMinutes(order.createdAt);
-          const isDelayed = Date.now() - new Date(order.createdAt).getTime() > 10 * 60000 && order.status !== 'COMPLETED';
+          const isDelayed = Date.now() - new Date(order.createdAt).getTime() > 10 * 60000 && order.status !== 'COMPLETED' && order.status !== 'CANCELLED';
+          const isCancelled = order.status === 'CANCELLED' || order.status === 'REFUNDED';
 
           return (
             <div
@@ -164,6 +180,14 @@ export const KOTDisplay: React.FC<KOTDisplayProps> = ({ orders }) => {
                 </div>
               )}
 
+              {/* Cancelled Banner */}
+              {isCancelled && (
+                <div className="bg-red-700 text-white text-[10px] font-bold tracking-wider uppercase px-3 py-1 text-center -mx-5 -mt-5 mb-3 flex items-center justify-center gap-1">
+                  <Ban className="w-3.5 h-3.5" />
+                  <span>CANCELLED ORDER • VOIDED BILL</span>
+                </div>
+              )}
+
               {/* Card Header */}
               <div>
                 <div className="flex items-start justify-between gap-2 border-b border-[#a19284]/30 pb-3 mb-3">
@@ -171,7 +195,7 @@ export const KOTDisplay: React.FC<KOTDisplayProps> = ({ orders }) => {
                     <span className="text-[10px] font-bold text-[#a19284] uppercase tracking-widest block font-['Cinzel']">
                       TOKEN NO.
                     </span>
-                    <span className="text-3xl font-['Playfair_Display'] font-black text-[#2e211d] tracking-tight">
+                    <span className={`text-3xl font-['Playfair_Display'] font-black tracking-tight ${isCancelled ? 'text-red-700 line-through' : 'text-[#2e211d]'}`}>
                       #{order.tokenNo}
                     </span>
                   </div>
@@ -193,13 +217,27 @@ export const KOTDisplay: React.FC<KOTDisplayProps> = ({ orders }) => {
                   <span>Ref: <strong className="text-[#2e211d]">{order.tableOrName}</strong></span>
                 </div>
 
+                {/* Cancelled Audit Info Box */}
+                {isCancelled && (
+                  <div className="bg-red-100/80 border border-red-200 p-2.5 rounded-xl mb-3 text-red-900 text-xs space-y-1">
+                    <div className="flex items-center gap-1 font-bold">
+                      <Ban className="w-3.5 h-3.5 text-red-700" />
+                      <span>Reason: {order.cancellationReason || 'Cancelled by staff'}</span>
+                    </div>
+                    <div className="text-[10px] text-red-700 flex items-center justify-between">
+                      <span>By: {order.cancelledBy || 'Cashier'}</span>
+                      <span>Stock Restored ✓</span>
+                    </div>
+                  </div>
+                )}
+
                 {/* Items List */}
                 <div className="space-y-2 mb-4">
                   {order.items.map((item, idx) => (
                     <div key={idx} className="bg-[#f4efe8]/50 p-2.5 rounded-xl border border-[#a19284]/20">
                       <div className="flex items-center justify-between text-sm">
-                        <span className="font-extrabold text-[#2e211d] flex items-center gap-1.5">
-                          <span className="w-6 h-6 rounded-lg bg-[#8c3a27] text-[#f4efe8] text-xs font-bold flex items-center justify-center shrink-0">
+                        <span className={`font-extrabold flex items-center gap-1.5 ${isCancelled ? 'text-gray-500 line-through' : 'text-[#2e211d]'}`}>
+                          <span className={`w-6 h-6 rounded-lg text-xs font-bold flex items-center justify-center shrink-0 ${isCancelled ? 'bg-gray-400 text-white' : 'bg-[#8c3a27] text-[#f4efe8]'}`}>
                             {item.quantity}x
                           </span>
                           {item.itemName}
@@ -230,40 +268,82 @@ export const KOTDisplay: React.FC<KOTDisplayProps> = ({ orders }) => {
               </div>
 
               {/* Action Buttons for Kitchen Staff */}
-              <div className="pt-2">
+              <div className="pt-2 space-y-2">
                 {order.status === 'PENDING' && (
-                  <button
-                    onClick={() => handleStatusChange(order.id, 'PENDING')}
-                    className="w-full py-3 bg-[#2e211d] hover:bg-[#1b1311] text-[#f4efe8] font-bold text-xs rounded-2xl shadow-md flex items-center justify-center gap-2 transition-all"
-                  >
-                    <Play className="w-4 h-4 fill-[#f4efe8]" />
-                    <span>START PREPARING ORDER</span>
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleStatusChange(order.id, 'PENDING')}
+                      className="flex-1 py-3 bg-[#2e211d] hover:bg-[#1b1311] text-[#f4efe8] font-bold text-xs rounded-2xl shadow-md flex items-center justify-center gap-2 transition-all"
+                    >
+                      <Play className="w-4 h-4 fill-[#f4efe8]" />
+                      <span>START PREPARING</span>
+                    </button>
+                    <button
+                      onClick={() => setCancellingOrder(order)}
+                      title="Cancel Order"
+                      className="p-3 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-bold text-xs rounded-2xl transition-all flex items-center justify-center"
+                    >
+                      <Ban className="w-4 h-4" />
+                    </button>
+                  </div>
                 )}
 
                 {order.status === 'PREPARING' && (
-                  <button
-                    onClick={() => handleStatusChange(order.id, 'PREPARING')}
-                    className="w-full py-3 bg-[#8c3a27] hover:bg-[#732f1f] text-[#f4efe8] font-bold text-xs rounded-2xl shadow-md flex items-center justify-center gap-2 transition-all"
-                  >
-                    <BellRing className="w-4 h-4" />
-                    <span>MARK READY FOR SERVING</span>
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleStatusChange(order.id, 'PREPARING')}
+                      className="flex-1 py-3 bg-[#8c3a27] hover:bg-[#732f1f] text-[#f4efe8] font-bold text-xs rounded-2xl shadow-md flex items-center justify-center gap-2 transition-all"
+                    >
+                      <BellRing className="w-4 h-4" />
+                      <span>MARK READY</span>
+                    </button>
+                    <button
+                      onClick={() => setCancellingOrder(order)}
+                      title="Cancel Order"
+                      className="p-3 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-bold text-xs rounded-2xl transition-all flex items-center justify-center"
+                    >
+                      <Ban className="w-4 h-4" />
+                    </button>
+                  </div>
                 )}
 
                 {order.status === 'READY' && (
-                  <button
-                    onClick={() => handleStatusChange(order.id, 'READY')}
-                    className="w-full py-3 bg-[#2e211d] hover:bg-[#1b1311] text-[#f4efe8] font-bold text-xs rounded-2xl shadow-md flex items-center justify-center gap-2 transition-all"
-                  >
-                    <CheckCircle2 className="w-4 h-4 text-[#e2d7c9]" />
-                    <span>COMPLETE & CLEAR TICKET</span>
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleStatusChange(order.id, 'READY')}
+                      className="flex-1 py-3 bg-[#2e211d] hover:bg-[#1b1311] text-[#f4efe8] font-bold text-xs rounded-2xl shadow-md flex items-center justify-center gap-2 transition-all"
+                    >
+                      <CheckCircle2 className="w-4 h-4 text-[#e2d7c9]" />
+                      <span>COMPLETE & CLEAR</span>
+                    </button>
+                    <button
+                      onClick={() => setCancellingOrder(order)}
+                      title="Cancel Order"
+                      className="p-3 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-bold text-xs rounded-2xl transition-all flex items-center justify-center"
+                    >
+                      <Ban className="w-4 h-4" />
+                    </button>
+                  </div>
                 )}
 
                 {order.status === 'COMPLETED' && (
-                  <div className="text-center py-1.5 text-xs font-bold text-[#a19284] bg-[#e2d7c9]/30 rounded-xl">
-                    ✓ Completed & Served
+                  <div className="flex items-center justify-between bg-[#e2d7c9]/30 rounded-xl p-2">
+                    <span className="text-xs font-bold text-[#a19284]">
+                      ✓ Completed & Served
+                    </span>
+                    <button
+                      onClick={() => setCancellingOrder(order)}
+                      className="text-[10px] text-red-700 hover:text-red-900 font-bold flex items-center gap-1 hover:underline"
+                    >
+                      <Ban className="w-3 h-3" />
+                      <span>Void / Cancel</span>
+                    </button>
+                  </div>
+                )}
+
+                {isCancelled && (
+                  <div className="text-center py-2 text-xs font-bold text-red-700 bg-red-100/50 rounded-xl border border-red-200">
+                    ✕ Order Cancelled • Not in Finance Totals
                   </div>
                 )}
               </div>
@@ -271,6 +351,18 @@ export const KOTDisplay: React.FC<KOTDisplayProps> = ({ orders }) => {
           );
         })}
       </div>
+
+      {/* Cancel Order Confirmation Modal */}
+      {cancellingOrder && (
+        <CancelOrderModal
+          order={cancellingOrder}
+          isOpen={Boolean(cancellingOrder)}
+          onClose={() => setCancellingOrder(null)}
+          onSuccess={() => setCancellingOrder(null)}
+          staffName="Kitchen Staff"
+        />
+      )}
     </div>
   );
 };
+

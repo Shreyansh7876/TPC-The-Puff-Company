@@ -2,18 +2,21 @@ import { PuffItem, Ingredient, Order, OrderStatus, PaymentMode, OrderType, CartI
 import { INITIAL_MENU_ITEMS, INITIAL_INGREDIENTS } from '../data/initialData';
 import { settingsStore } from './settingsStore';
 import { customerStore } from './customerStore';
+import { persistentDb } from './persistentDb';
 
 type Listener<T> = (data: T) => void;
 
 class LivePuffStore {
-  private menuItems: PuffItem[] = [...INITIAL_MENU_ITEMS];
-  private ingredients: Ingredient[] = [...INITIAL_INGREDIENTS];
-  private orders: Order[] = [];
+  // Synchronous instant boot from Persistent Database
+  private menuItems: PuffItem[] = persistentDb.getSyncMenu();
+  private ingredients: Ingredient[] = persistentDb.getSyncInventory();
+  private orders: Order[] = persistentDb.getSyncOrders();
   private tokenCounter: number = 101;
 
   private spreadsheetId: string | null = null;
   private googleSheetsConnected: boolean = false;
   private lastSyncedAt: string | null = null;
+  private isSyncing: boolean = false;
 
   private menuListeners: Set<Listener<PuffItem[]>> = new Set();
   private ingredientListeners: Set<Listener<Ingredient[]>> = new Set();
@@ -24,42 +27,95 @@ class LivePuffStore {
   private pollInterval: any = null;
 
   constructor() {
+    this.recalculateTokenCounter();
     this.initStore();
     this.setupListeners();
+  }
+
+  private recalculateTokenCounter() {
+    if (this.orders.length > 0) {
+      const maxToken = this.orders.reduce((max, o) => Math.max(max, o.tokenNo || 0), 100);
+      this.tokenCounter = maxToken + 1;
+    } else {
+      this.tokenCounter = 101;
+    }
   }
 
   public async initStore() {
     if (typeof window === 'undefined') return;
 
     try {
-      // 1. Check Auth & Google Sheet Connection
+      // 1. Deep load from IndexedDB to ensure full history is present
+      const indexedData = await persistentDb.loadAllFromIndexedDB();
+      if (indexedData) {
+        let updated = false;
+        if (indexedData.orders.length > this.orders.length) {
+          // Merge by ID
+          const orderMap = new Map<string, Order>();
+          indexedData.orders.forEach((o) => orderMap.set(o.id, o));
+          this.orders.forEach((o) => orderMap.set(o.id, o));
+          this.orders = Array.from(orderMap.values()).sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+          persistentDb.saveOrders(this.orders);
+          this.recalculateTokenCounter();
+          updated = true;
+        }
+
+        if (indexedData.inventory.length > 0 && this.ingredients.length === 0) {
+          this.ingredients = indexedData.inventory;
+          persistentDb.saveInventory(this.ingredients);
+          this.notifyIngredients();
+        }
+
+        if (indexedData.menu.length > 0 && this.menuItems.length === 0) {
+          this.menuItems = indexedData.menu;
+          persistentDb.saveMenu(this.menuItems);
+          this.notifyMenu();
+        }
+
+        if (updated) {
+          this.notifyOrders();
+        }
+      }
+
+      // 2. Check Auth & Google Sheet Connection
       const authRes = await fetch('/api/auth/google/status').then((r) => r.json()).catch(() => ({ authenticated: false }));
       if (authRes.spreadsheetId) {
         this.spreadsheetId = authRes.spreadsheetId;
       }
 
-      // 2. Initialize / Sync Google Sheets Database
-      const initRes = await fetch('/api/sheets/init', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ spreadsheetId: this.spreadsheetId })
-      }).then((r) => r.json()).catch(() => null);
+      // 3. Two-Way Sync with Backend Server Database
+      await this.syncWithServerBackend();
 
-      if (initRes && initRes.success) {
-        this.spreadsheetId = initRes.spreadsheetId;
-        this.googleSheetsConnected = true;
+      // 4. Initialize / Sync Google Sheets Database if configured
+      if (this.spreadsheetId) {
+        const initRes = await fetch('/api/sheets/init', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ spreadsheetId: this.spreadsheetId })
+        }).then((r) => r.json()).catch(() => null);
+
+        if (initRes && initRes.success) {
+          this.spreadsheetId = initRes.spreadsheetId;
+          this.googleSheetsConnected = true;
+          await this.fetchAllFromGoogleSheets();
+        }
       }
 
-      // 3. Fetch Data from Google Sheets API
-      await this.fetchAllFromGoogleSheets();
+      // 5. Flush any pending offline mutations
+      await this.flushOfflineQueue();
     } catch (err) {
-      console.warn('Initial Google Sheets sync notice:', err);
+      console.warn('Initial store synchronization notice:', err);
     }
 
-    // Start live auto-polling every 4 seconds to sync Google Sheets across terminals
+    // Start live auto-polling every 4 seconds to sync across terminals and flush queue
     if (!this.pollInterval && typeof window !== 'undefined') {
       this.pollInterval = setInterval(() => {
-        this.fetchAllFromGoogleSheets();
+        if (this.isOnline) {
+          this.flushOfflineQueue();
+          this.syncWithServerBackend();
+        }
       }, 4000);
     }
   }
@@ -70,42 +126,186 @@ class LivePuffStore {
     window.addEventListener('online', () => {
       this.isOnline = true;
       this.notifySyncStatus();
-      this.fetchAllFromGoogleSheets();
+      this.flushOfflineQueue();
+      this.syncWithServerBackend();
     });
+
     window.addEventListener('offline', () => {
       this.isOnline = false;
       this.notifySyncStatus();
     });
   }
 
-  public async fetchAllFromGoogleSheets() {
+  // --- TWO-WAY BACKEND DATABASE SYNC ---
+
+  public async syncWithServerBackend() {
+    if (this.isSyncing) return;
+    this.isSyncing = true;
+
     try {
-      const spIdParam = this.spreadsheetId ? `?spreadsheetId=${encodeURIComponent(this.spreadsheetId)}` : '';
+      const payload = {
+        orders: this.orders,
+        inventory: this.ingredients,
+        menu: this.menuItems,
+        spreadsheetId: this.spreadsheetId,
+      };
+
+      const res = await fetch('/api/store/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).then(async (r) => {
+        const text = await r.text();
+        try { return JSON.parse(text); } catch { return null; }
+      }).catch(() => null);
+
+      if (res && res.success) {
+        // Merge merged orders from server
+        if (Array.isArray(res.orders)) {
+          const serverOrders: Order[] = res.orders;
+          const orderMap = new Map<string, Order>();
+          serverOrders.forEach((o) => orderMap.set(o.id, o));
+          this.orders.forEach((o) => orderMap.set(o.id, o));
+
+          this.orders = Array.from(orderMap.values()).sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+          persistentDb.saveOrders(this.orders);
+          this.recalculateTokenCounter();
+          this.notifyOrders();
+        }
+
+        if (Array.isArray(res.inventory) && res.inventory.length > 0) {
+          this.ingredients = res.inventory;
+          persistentDb.saveInventory(this.ingredients);
+          this.notifyIngredients();
+        }
+
+        if (Array.isArray(res.menu) && res.menu.length > 0) {
+          this.menuItems = res.menu;
+          persistentDb.saveMenu(this.menuItems);
+          this.notifyMenu();
+        }
+
+        if (res.spreadsheetId) {
+          this.spreadsheetId = res.spreadsheetId;
+        }
+
+        this.lastSyncedAt = new Date().toLocaleTimeString();
+        this.notifySyncStatus();
+      }
+    } catch (e) {
+      console.warn('Background server sync notice:', e);
+    } finally {
+      this.isSyncing = false;
+    }
+  }
+
+  // --- OFFLINE RETRY QUEUE ---
+
+  public async flushOfflineQueue() {
+    const queue = persistentDb.getSyncOfflineQueue();
+    if (queue.length === 0) return;
+
+    for (const item of queue) {
+      try {
+        if (item.type === 'ORDER_CREATE') {
+          const res = await fetch('/api/sheets/orders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ order: item.payload, spreadsheetId: this.spreadsheetId })
+          });
+          if (res.ok) {
+            persistentDb.dequeueMutation(item.id);
+          }
+        } else if (item.type === 'ORDER_STATUS') {
+          const res = await fetch('/api/sheets/orders/status', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...item.payload, spreadsheetId: this.spreadsheetId })
+          });
+          if (res.ok) {
+            persistentDb.dequeueMutation(item.id);
+          }
+        } else if (item.type === 'INVENTORY_UPDATE') {
+          const res = await fetch('/api/sheets/inventory', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...item.payload, spreadsheetId: this.spreadsheetId })
+          });
+          if (res.ok) {
+            persistentDb.dequeueMutation(item.id);
+          }
+        } else if (item.type === 'MENU_UPDATE') {
+          const res = await fetch('/api/sheets/menu', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...item.payload, spreadsheetId: this.spreadsheetId })
+          });
+          if (res.ok) {
+            persistentDb.dequeueMutation(item.id);
+          }
+        }
+      } catch (err) {
+        console.warn(`Failed to flush queue item ${item.id}:`, err);
+        break; // Retry next cycle
+      }
+    }
+
+    this.notifySyncStatus();
+  }
+
+  // --- GOOGLE SHEETS FETCH ---
+
+  public async fetchAllFromGoogleSheets() {
+    if (!this.spreadsheetId) return;
+
+    try {
+      const spIdParam = `?spreadsheetId=${encodeURIComponent(this.spreadsheetId)}`;
 
       const [menuData, inventoryData, ordersData] = await Promise.all([
-        fetch(`/api/sheets/menu${spIdParam}`).then((r) => r.json()).catch(() => null),
-        fetch(`/api/sheets/inventory${spIdParam}`).then((r) => r.json()).catch(() => null),
-        fetch(`/api/sheets/orders${spIdParam}`).then((r) => r.json()).catch(() => null)
+        fetch(`/api/sheets/menu${spIdParam}`)
+          .then(async (r) => {
+            const text = await r.text();
+            try { return JSON.parse(text); } catch { return null; }
+          })
+          .catch(() => null),
+        fetch(`/api/sheets/inventory${spIdParam}`)
+          .then(async (r) => {
+            const text = await r.text();
+            try { return JSON.parse(text); } catch { return null; }
+          })
+          .catch(() => null),
+        fetch(`/api/sheets/orders${spIdParam}`)
+          .then(async (r) => {
+            const text = await r.text();
+            try { return JSON.parse(text); } catch { return null; }
+          })
+          .catch(() => null)
       ]);
 
       if (menuData && Array.isArray(menuData.menu) && menuData.menu.length > 0) {
         this.menuItems = menuData.menu;
+        persistentDb.saveMenu(this.menuItems);
         this.notifyMenu();
       }
 
       if (inventoryData && Array.isArray(inventoryData.inventory) && inventoryData.inventory.length > 0) {
         this.ingredients = inventoryData.inventory;
+        persistentDb.saveInventory(this.ingredients);
         this.notifyIngredients();
       }
 
-      if (ordersData && Array.isArray(ordersData.orders)) {
-        this.orders = ordersData.orders;
-        if (this.orders.length > 0) {
-          const maxToken = Math.max(...this.orders.map((o) => o.tokenNo || 0));
-          if (maxToken >= this.tokenCounter) {
-            this.tokenCounter = maxToken + 1;
-          }
-        }
+      if (ordersData && Array.isArray(ordersData.orders) && ordersData.orders.length > 0) {
+        const orderMap = new Map<string, Order>();
+        ordersData.orders.forEach((o: Order) => orderMap.set(o.id, o));
+        this.orders.forEach((o) => orderMap.set(o.id, o));
+
+        this.orders = Array.from(orderMap.values()).sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+        persistentDb.saveOrders(this.orders);
+        this.recalculateTokenCounter();
         this.notifyOrders();
       }
 
@@ -118,20 +318,31 @@ class LivePuffStore {
 
   public async connectGoogleSheets(customId?: string) {
     try {
-      const res = await fetch('/api/sheets/init', {
+      const response = await fetch('/api/sheets/init', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ spreadsheetId: customId || this.spreadsheetId })
-      }).then((r) => r.json());
+      });
+
+      const responseText = await response.text();
+      let res: any;
+      try {
+        res = JSON.parse(responseText);
+      } catch (parseErr) {
+        return {
+          success: false,
+          error: 'Server returned an HTML response instead of JSON. Please authorize Google Account (OAuth) first, or check the server logs.'
+        };
+      }
 
       if (res.spreadsheetId) {
         this.spreadsheetId = res.spreadsheetId;
-        this.googleSheetsConnected = true;
+        this.googleSheetsConnected = res.success && res.authenticated;
         await this.fetchAllFromGoogleSheets();
       }
       return res;
     } catch (e: any) {
-      return { success: false, error: e.message };
+      return { success: false, error: e.message || 'Network error connecting to Google Sheets' };
     }
   }
 
@@ -148,6 +359,7 @@ class LivePuffStore {
   }
 
   private notifySyncStatus() {
+    const queue = persistentDb.getSyncOfflineQueue();
     const status: SyncStatus = {
       isOnline: this.isOnline,
       firebaseConnected: true,
@@ -155,7 +367,7 @@ class LivePuffStore {
       spreadsheetId: this.spreadsheetId,
       spreadsheetUrl: this.spreadsheetId ? `https://docs.google.com/spreadsheets/d/${this.spreadsheetId}/edit` : null,
       lastSyncedAt: this.lastSyncedAt || new Date().toLocaleTimeString(),
-      pendingQueueCount: 0,
+      pendingQueueCount: queue.length,
     };
     this.syncStatusListeners.forEach((fn) => fn(status));
   }
@@ -198,7 +410,7 @@ class LivePuffStore {
     return () => this.syncStatusListeners.delete(listener);
   }
 
-  // --- CORE POS & INVENTORY ACTIONS (Direct to Google Sheets API) ---
+  // --- CORE POS & INVENTORY ACTIONS (Dual-shield Persistent Saves) ---
 
   public placeOrder(params: {
     cart: CartItem[];
@@ -283,17 +495,31 @@ class LivePuffStore {
       this.deductInventoryForOrder(params.cart);
     }
 
-    // Save order locally and send POST to Google Sheets API
+    // 1. Update in-memory state
     this.orders.unshift(newOrder);
+
+    // 2. Immediate Dual-Tier Persistence (LocalStorage + IndexedDB)
+    persistentDb.saveOrders(this.orders);
     this.notifyOrders();
 
-    settingsStore.logActivity('New Order Created', `Invoice #${invoiceNo} (${newOrder.orderType}) placed for ₹${roundedTotal.toFixed(2)} via ${newOrder.paymentMode}`);
+    settingsStore.logActivity(
+      'New Order Created',
+      `Invoice #${invoiceNo} (${newOrder.orderType}) placed for ₹${roundedTotal.toFixed(2)} via ${newOrder.paymentMode}`
+    );
 
+    // 3. Dispatch sync to backend server & Google Sheets
     fetch('/api/sheets/orders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ order: newOrder, spreadsheetId: this.spreadsheetId })
-    }).catch((e) => console.error('Failed to post order to Google Sheets:', e));
+    }).catch((e) => {
+      console.warn('Network sync failed, enqueued for automatic retry:', e);
+      persistentDb.enqueueMutation({
+        type: 'ORDER_CREATE',
+        payload: newOrder,
+      });
+      this.notifySyncStatus();
+    });
 
     return newOrder;
   }
@@ -331,12 +557,18 @@ class LivePuffStore {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ item: updatedIng, action: 'update', spreadsheetId: this.spreadsheetId })
-          }).catch((e) => console.error('Failed to sync stock deduction to Google Sheets:', e));
+          }).catch((e) => {
+            persistentDb.enqueueMutation({
+              type: 'INVENTORY_UPDATE',
+              payload: { item: updatedIng, action: 'update' }
+            });
+          });
         }
       });
     });
 
     if (inventoryUpdated) {
+      persistentDb.saveInventory(this.ingredients);
       this.notifyIngredients();
     }
   }
@@ -347,7 +579,6 @@ class LivePuffStore {
     let inventoryUpdated = false;
 
     order.items.forEach((orderItem) => {
-      // Find matching menu item or use recipe if available
       const menuItem = this.menuItems.find((m) => m.id === orderItem.itemId || m.name === orderItem.itemName);
       if (!menuItem || !menuItem.recipe || menuItem.recipe.length === 0) return;
 
@@ -378,32 +609,45 @@ class LivePuffStore {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ item: updatedIng, action: 'update', spreadsheetId: this.spreadsheetId })
-          }).catch((e) => console.error('Failed to sync restored stock to Google Sheets:', e));
+          }).catch((e) => {
+            persistentDb.enqueueMutation({
+              type: 'INVENTORY_UPDATE',
+              payload: { item: updatedIng, action: 'update' }
+            });
+          });
         }
       });
     });
 
     if (inventoryUpdated) {
+      persistentDb.saveInventory(this.ingredients);
       this.notifyIngredients();
     }
   }
 
-  public updateOrderStatus(orderId: string, newStatus: OrderStatus) {
+  public updateOrderStatus(orderId: string, newStatus: OrderStatus, reason?: string, staffName?: string) {
     const idx = this.orders.findIndex((o) => o.id === orderId);
     if (idx !== -1) {
       const order = this.orders[idx];
       const oldStatus = order.status;
 
-      this.orders[idx] = {
+      const updatedOrder: Order = {
         ...order,
         status: newStatus,
+        ...(newStatus === 'CANCELLED' || newStatus === 'REFUNDED' ? {
+          cancelledAt: new Date().toISOString(),
+          cancellationReason: reason || order.cancellationReason || 'Cancelled by staff',
+          cancelledBy: staffName || order.cancelledBy || 'Staff Cashier',
+        } : {})
       };
+
+      this.orders[idx] = updatedOrder;
 
       const wasActive = oldStatus !== 'CANCELLED' && oldStatus !== 'REFUNDED';
       const isNowCancelled = newStatus === 'CANCELLED' || newStatus === 'REFUNDED';
 
       if (wasActive && isNowCancelled) {
-        this.restoreInventoryForOrder({ ...order, status: newStatus });
+        this.restoreInventoryForOrder(updatedOrder);
       } else if (!wasActive && !isNowCancelled) {
         // Re-deduct if un-cancelled
         const cartForOrder: CartItem[] = (order.items || []).map((item) => {
@@ -426,14 +670,41 @@ class LivePuffStore {
         this.deductInventoryForOrder(cartForOrder);
       }
 
+      // Immediately write to persistent storage
+      persistentDb.saveOrders(this.orders);
       this.notifyOrders();
 
       fetch('/api/sheets/orders/status', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orderId, status: newStatus, spreadsheetId: this.spreadsheetId })
-      }).catch((e) => console.error('Failed to update status on Google Sheets:', e));
+        body: JSON.stringify({ 
+          orderId, 
+          status: newStatus, 
+          cancellationReason: updatedOrder.cancellationReason,
+          cancelledBy: updatedOrder.cancelledBy,
+          spreadsheetId: this.spreadsheetId 
+        })
+      }).catch((e) => {
+        persistentDb.enqueueMutation({
+          type: 'ORDER_STATUS',
+          payload: { 
+            orderId, 
+            status: newStatus, 
+            cancellationReason: updatedOrder.cancellationReason,
+            cancelledBy: updatedOrder.cancelledBy 
+          }
+        });
+        this.notifySyncStatus();
+      });
     }
+  }
+
+  public cancelOrder(orderId: string, reason: string = 'Customer Request / Cancelled', staffName: string = 'Counter Cashier'): boolean {
+    const idx = this.orders.findIndex((o) => o.id === orderId);
+    if (idx === -1) return false;
+
+    this.updateOrderStatus(orderId, 'CANCELLED', reason, staffName);
+    return true;
   }
 
   // --- MENU MANAGEMENT ---
@@ -444,26 +715,40 @@ class LivePuffStore {
       id: 'puff_' + Date.now(),
     };
     this.menuItems.push(newItem);
+    persistentDb.saveMenu(this.menuItems);
     this.notifyMenu();
 
     fetch('/api/sheets/menu', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ item: newItem, action: 'add', spreadsheetId: this.spreadsheetId })
-    }).catch((e) => console.error('Failed to add menu item to Google Sheets:', e));
+    }).catch((e) => {
+      persistentDb.enqueueMutation({
+        type: 'MENU_UPDATE',
+        payload: { item: newItem, action: 'add' }
+      });
+      this.notifySyncStatus();
+    });
   }
 
   public updateMenuItem(id: string, updated: Partial<PuffItem>) {
     const idx = this.menuItems.findIndex((m) => m.id === id);
     if (idx !== -1) {
       this.menuItems[idx] = { ...this.menuItems[idx], ...updated };
+      persistentDb.saveMenu(this.menuItems);
       this.notifyMenu();
 
       fetch('/api/sheets/menu', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ item: this.menuItems[idx], action: 'update', spreadsheetId: this.spreadsheetId })
-      }).catch((e) => console.error('Failed to update menu item on Google Sheets:', e));
+      }).catch((e) => {
+        persistentDb.enqueueMutation({
+          type: 'MENU_UPDATE',
+          payload: { item: this.menuItems[idx], action: 'update' }
+        });
+        this.notifySyncStatus();
+      });
     }
   }
 
@@ -471,19 +756,27 @@ class LivePuffStore {
     const idx = this.menuItems.findIndex((m) => m.id === id);
     if (idx !== -1) {
       this.menuItems[idx].isAvailable = !this.menuItems[idx].isAvailable;
+      persistentDb.saveMenu(this.menuItems);
       this.notifyMenu();
 
       fetch('/api/sheets/menu', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ item: this.menuItems[idx], action: 'update', spreadsheetId: this.spreadsheetId })
-      }).catch((e) => console.error('Failed to toggle availability on Google Sheets:', e));
+      }).catch((e) => {
+        persistentDb.enqueueMutation({
+          type: 'MENU_UPDATE',
+          payload: { item: this.menuItems[idx], action: 'update' }
+        });
+        this.notifySyncStatus();
+      });
     }
   }
 
   public deleteMenuItem(id: string) {
     const itemToDelete = this.menuItems.find((m) => m.id === id);
     this.menuItems = this.menuItems.filter((m) => m.id !== id);
+    persistentDb.saveMenu(this.menuItems);
     this.notifyMenu();
 
     if (itemToDelete) {
@@ -491,7 +784,13 @@ class LivePuffStore {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ item: itemToDelete, action: 'delete', spreadsheetId: this.spreadsheetId })
-      }).catch((e) => console.error('Failed to delete menu item from Google Sheets:', e));
+      }).catch((e) => {
+        persistentDb.enqueueMutation({
+          type: 'MENU_UPDATE',
+          payload: { item: itemToDelete, action: 'delete' }
+        });
+        this.notifySyncStatus();
+      });
     }
   }
 
@@ -503,6 +802,7 @@ class LivePuffStore {
       const oldIng = this.ingredients[idx];
       const newIng = { ...oldIng, ...updated };
       this.ingredients[idx] = newIng;
+      persistentDb.saveInventory(this.ingredients);
       this.notifyIngredients();
 
       if (updated.currentStock !== undefined && updated.currentStock !== oldIng.currentStock) {
@@ -521,7 +821,13 @@ class LivePuffStore {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ item: newIng, action: 'update', spreadsheetId: this.spreadsheetId })
-      }).catch((e) => console.error('Failed to update ingredient on Google Sheets:', e));
+      }).catch((e) => {
+        persistentDb.enqueueMutation({
+          type: 'INVENTORY_UPDATE',
+          payload: { item: newIng, action: 'update' }
+        });
+        this.notifySyncStatus();
+      });
     }
   }
 
@@ -534,6 +840,7 @@ class LivePuffStore {
 
       const updatedIng = { ...ing, currentStock: resultingStock };
       this.ingredients[idx] = updatedIng;
+      persistentDb.saveInventory(this.ingredients);
       this.notifyIngredients();
 
       settingsStore.logInventoryAudit({
@@ -549,7 +856,13 @@ class LivePuffStore {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ item: updatedIng, action: 'update', spreadsheetId: this.spreadsheetId })
-      }).catch((e) => console.error('Failed to update ingredient stock on Google Sheets:', e));
+      }).catch((e) => {
+        persistentDb.enqueueMutation({
+          type: 'INVENTORY_UPDATE',
+          payload: { item: updatedIng, action: 'update' }
+        });
+        this.notifySyncStatus();
+      });
     }
   }
 
@@ -559,6 +872,7 @@ class LivePuffStore {
       id: 'ing_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
     };
     this.ingredients.push(newIng);
+    persistentDb.saveInventory(this.ingredients);
     this.notifyIngredients();
 
     settingsStore.logInventoryAudit({
@@ -574,12 +888,19 @@ class LivePuffStore {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ item: newIng, action: 'add', spreadsheetId: this.spreadsheetId })
-    }).catch((e) => console.error('Failed to add ingredient to Google Sheets:', e));
+    }).catch((e) => {
+      persistentDb.enqueueMutation({
+        type: 'INVENTORY_UPDATE',
+        payload: { item: newIng, action: 'add' }
+      });
+      this.notifySyncStatus();
+    });
   }
 
   public deleteIngredient(id: string) {
     const ingToDelete = this.ingredients.find((ing) => ing.id === id);
     this.ingredients = this.ingredients.filter((ing) => ing.id !== id);
+    persistentDb.saveInventory(this.ingredients);
     this.notifyIngredients();
 
     if (ingToDelete) {
@@ -596,7 +917,13 @@ class LivePuffStore {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ item: ingToDelete, action: 'delete', spreadsheetId: this.spreadsheetId })
-      }).catch((e) => console.error('Failed to delete ingredient from Google Sheets:', e));
+      }).catch((e) => {
+        persistentDb.enqueueMutation({
+          type: 'INVENTORY_UPDATE',
+          payload: { item: ingToDelete, action: 'delete' }
+        });
+        this.notifySyncStatus();
+      });
     }
   }
 
@@ -613,11 +940,14 @@ class LivePuffStore {
       filteredOrders = this.orders.filter((o) => new Date(o.createdAt).toDateString() === todayStr);
     }
 
-    const activeOrders = filteredOrders.filter((o) => o.status !== 'CANCELLED');
+    const activeOrders = filteredOrders.filter((o) => o.status !== 'CANCELLED' && o.status !== 'REFUNDED');
+    const cancelledOrders = filteredOrders.filter((o) => o.status === 'CANCELLED' || o.status === 'REFUNDED');
 
-    const totalRevenue = activeOrders.reduce((sum, o) => sum + o.total, 0);
+    const totalRevenue = activeOrders.reduce((sum, o) => sum + (o.roundedTotal || o.total), 0);
     const totalOrders = activeOrders.length;
     const avgOrderValue = totalOrders > 0 ? Math.round(totalRevenue / totalOrders) : 0;
+    const cancelledOrdersCount = cancelledOrders.length;
+    const cancelledRevenueTotal = cancelledOrders.reduce((sum, o) => sum + (o.roundedTotal || o.total), 0);
 
     let pureCashTotal = 0;
     let pureUpiTotal = 0;
@@ -676,6 +1006,8 @@ class LivePuffStore {
       pureCashTotal,
       pureUpiTotal,
       pureCardTotal,
+      cancelledOrdersCount,
+      cancelledRevenueTotal,
       splitBreakdown: {
         cash: splitCashPortion,
         upi: splitUpiPortion,
@@ -684,12 +1016,16 @@ class LivePuffStore {
       topSellingItems,
     };
   }
+
   // --- RESET SEED DATA ---
 
   public resetToDefaultSeedData() {
     this.menuItems = [...INITIAL_MENU_ITEMS];
     this.ingredients = [...INITIAL_INGREDIENTS];
     this.orders = [];
+    persistentDb.saveMenu(this.menuItems);
+    persistentDb.saveInventory(this.ingredients);
+    persistentDb.saveOrders(this.orders);
     this.notifyMenu();
     this.notifyIngredients();
     this.notifyOrders();

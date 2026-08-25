@@ -1,7 +1,7 @@
 {
-  "short_name": "THE PUFF CO",
-  "name": "THE PUFF COMPANY - POS & KOT System",
-  "description": "Real-time POS, KOT Display, Inventory, & Analytics for THE PUFF COMPANY",
+  "short_name": "THE PUFF CO.",
+  "name": "THE PUFF CO. - Smart POS & KOT System",
+  "description": "Kiosk-style POS, Real-time KOT Display, Inventory & Analytics for THE PUFF CO.",
   "icons": [
     {
       "src": "/puff-icon.svg",
@@ -11,9 +11,12 @@
     }
   ],
   "start_url": "/",
-  "background_color": "#fff7ed",
-  "theme_color": "#ea580c",
+  "scope": "/",
+  "background_color": "#f4efe8",
+  "theme_color": "#8c3a27",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "window-controls-overlay"],
   "orientation": "any",
   "categories": ["business", "food", "point-of-sale"]
 }
+

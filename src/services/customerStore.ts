@@ -36,6 +36,11 @@ class CustomerStore {
   private saveToStorage() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.manualNotes));
+      fetch('/api/store/customers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customers: this.manualNotes })
+      }).catch(() => {});
     } catch (e) {
       console.error('Failed to save customer database to storage:', e);
     }

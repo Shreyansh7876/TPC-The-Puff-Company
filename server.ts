@@ -1,6 +1,7 @@
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import path from 'path';
+import fs from 'fs';
 import { google } from 'googleapis';
 import { createServer as createViteServer } from 'vite';
 
@@ -41,13 +42,68 @@ const INITIAL_MENU_ITEMS = [
   { id: 'b_01', name: 'Chilled Masala Gujarati Chaas (250ml)', category: 'Company Signature Specials', price: 20, isVeg: true, description: 'Refreshing digestive buttermilk spiced with roasted cumin and rock salt.', isAvailable: true, image: drinkImg, recipe: [{ ingredientId: 'ing_chaas', quantityNeeded: 250 }] }
 ];
 
-// Memory fallback store when Google Sheets is connecting or syncing
+// Persistent Disk Database Configuration
+const DB_DIR = path.join(process.cwd(), 'data');
+const DB_PATH = path.join(DB_DIR, 'pos_database.json');
+
+// Memory store backed permanently by disk
 let memoryStore = {
   menu: [...INITIAL_MENU_ITEMS],
   inventory: [...INITIAL_INGREDIENTS],
   orders: [] as any[],
+  customers: {} as Record<string, any>,
+  settings: null as any,
   spreadsheetId: ''
 };
+
+function loadDatabaseFromDisk() {
+  try {
+    if (!fs.existsSync(DB_DIR)) {
+      fs.mkdirSync(DB_DIR, { recursive: true });
+    }
+    if (fs.existsSync(DB_PATH)) {
+      const fileData = fs.readFileSync(DB_PATH, 'utf-8');
+      const parsed = JSON.parse(fileData);
+      if (parsed) {
+        if (Array.isArray(parsed.menu) && parsed.menu.length > 0) memoryStore.menu = parsed.menu;
+        if (Array.isArray(parsed.inventory) && parsed.inventory.length > 0) memoryStore.inventory = parsed.inventory;
+        if (Array.isArray(parsed.orders)) memoryStore.orders = parsed.orders;
+        if (parsed.customers) memoryStore.customers = parsed.customers;
+        if (parsed.settings) memoryStore.settings = parsed.settings;
+        if (parsed.spreadsheetId) memoryStore.spreadsheetId = parsed.spreadsheetId;
+        console.log(`[POS Database] Loaded ${memoryStore.orders.length} orders, ${memoryStore.menu.length} menu items, ${memoryStore.inventory.length} ingredients from disk.`);
+        return;
+      }
+    }
+  } catch (err) {
+    console.error('[POS Database] Error reading database from disk:', err);
+  }
+  // Initialize and write default database if none existed
+  saveDatabaseToDisk();
+}
+
+function saveDatabaseToDisk() {
+  try {
+    if (!fs.existsSync(DB_DIR)) {
+      fs.mkdirSync(DB_DIR, { recursive: true });
+    }
+    const dataToSave = {
+      menu: memoryStore.menu,
+      inventory: memoryStore.inventory,
+      orders: memoryStore.orders,
+      customers: memoryStore.customers,
+      settings: memoryStore.settings,
+      spreadsheetId: memoryStore.spreadsheetId,
+      updatedAt: new Date().toISOString()
+    };
+    fs.writeFileSync(DB_PATH, JSON.stringify(dataToSave, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('[POS Database] Error writing database to disk:', err);
+  }
+}
+
+// Load persistent data immediately on server boot
+loadDatabaseFromDisk();
 
 async function startServer() {
   const app = express();
@@ -146,6 +202,117 @@ async function startServer() {
   app.post('/api/auth/google/logout', (req, res) => {
     res.clearCookie('google_tokens');
     res.json({ success: true });
+  });
+
+  // --- STORE PERSISTENCE & TWO-WAY SYNC ENDPOINTS ---
+
+  // GET All Persistent Store Data
+  app.get('/api/store/all', (req, res) => {
+    return res.json({
+      success: true,
+      menu: memoryStore.menu,
+      inventory: memoryStore.inventory,
+      orders: memoryStore.orders,
+      customers: memoryStore.customers,
+      settings: memoryStore.settings,
+      spreadsheetId: memoryStore.spreadsheetId,
+      orderCount: memoryStore.orders.length,
+      lastSavedAt: new Date().toISOString()
+    });
+  });
+
+  // Full Two-Way Sync Endpoint
+  app.post('/api/store/sync', (req, res) => {
+    try {
+      const { orders, inventory, menu, customers, settings, spreadsheetId } = req.body;
+
+      if (spreadsheetId && typeof spreadsheetId === 'string') {
+        memoryStore.spreadsheetId = spreadsheetId;
+      }
+
+      // Merge Orders: Keep all unique orders by ID, preserving any updated fields
+      if (Array.isArray(orders) && orders.length > 0) {
+        const orderMap = new Map<string, any>();
+        
+        // Load server orders into map
+        memoryStore.orders.forEach((o) => {
+          if (o && o.id) orderMap.set(o.id, o);
+        });
+
+        // Merge incoming client orders
+        orders.forEach((incoming: any) => {
+          if (!incoming || !incoming.id) return;
+          if (!orderMap.has(incoming.id)) {
+            orderMap.set(incoming.id, incoming);
+          } else {
+            const existing = orderMap.get(incoming.id);
+            // If incoming has cancellation or more detailed status, update
+            if (incoming.status !== existing.status || incoming.cancelledAt || incoming.invoiceNo) {
+              orderMap.set(incoming.id, { ...existing, ...incoming });
+            }
+          }
+        });
+
+        memoryStore.orders = Array.from(orderMap.values()).sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+      }
+
+      // Update Inventory if provided
+      if (Array.isArray(inventory) && inventory.length > 0) {
+        memoryStore.inventory = inventory;
+      }
+
+      // Update Menu if provided
+      if (Array.isArray(menu) && menu.length > 0) {
+        memoryStore.menu = menu;
+      }
+
+      // Update Customers if provided
+      if (customers && typeof customers === 'object') {
+        memoryStore.customers = { ...memoryStore.customers, ...customers };
+      }
+
+      // Update Settings if provided
+      if (settings && typeof settings === 'object') {
+        memoryStore.settings = { ...(memoryStore.settings || {}), ...settings };
+      }
+
+      // Save to disk immediately
+      saveDatabaseToDisk();
+
+      return res.json({
+        success: true,
+        orders: memoryStore.orders,
+        inventory: memoryStore.inventory,
+        menu: memoryStore.menu,
+        customers: memoryStore.customers,
+        settings: memoryStore.settings,
+        spreadsheetId: memoryStore.spreadsheetId,
+        message: 'Store state successfully synchronized and permanently persisted to disk.'
+      });
+    } catch (err: any) {
+      console.error('Error during store sync:', err);
+      return res.status(500).json({ success: false, error: err?.message || 'Sync failed' });
+    }
+  });
+
+  // Save Settings
+  app.post('/api/store/settings', (req, res) => {
+    if (req.body.settings) {
+      memoryStore.settings = req.body.settings;
+      saveDatabaseToDisk();
+    }
+    return res.json({ success: true, settings: memoryStore.settings });
+  });
+
+  // Save Customers
+  app.post('/api/store/customers', (req, res) => {
+    if (req.body.customers) {
+      memoryStore.customers = { ...memoryStore.customers, ...req.body.customers };
+      saveDatabaseToDisk();
+    }
+    return res.json({ success: true, customers: memoryStore.customers });
   });
 
   // --- GOOGLE SHEETS POS DATA ENDPOINTS ---
@@ -325,6 +492,7 @@ async function startServer() {
     } else if (action === 'delete') {
       memoryStore.menu = memoryStore.menu.filter((m) => m.id !== item.id);
     }
+    saveDatabaseToDisk();
 
     if (spreadsheetId && auth) {
       try {
@@ -410,6 +578,7 @@ async function startServer() {
       } else if (action === 'delete') {
         memoryStore.inventory = memoryStore.inventory.filter((ing) => ing.id !== item.id);
       }
+      saveDatabaseToDisk();
     }
 
     if (spreadsheetId && auth && item) {
@@ -484,7 +653,15 @@ async function startServer() {
     const spreadsheetId = req.body.spreadsheetId || memoryStore.spreadsheetId;
     const auth = getClientFromReq(req);
 
-    memoryStore.orders.unshift(order);
+    if (order && order.id) {
+      const existingIdx = memoryStore.orders.findIndex((o) => o.id === order.id);
+      if (existingIdx !== -1) {
+        memoryStore.orders[existingIdx] = { ...memoryStore.orders[existingIdx], ...order };
+      } else {
+        memoryStore.orders.unshift(order);
+      }
+      saveDatabaseToDisk();
+    }
 
     if (spreadsheetId && auth) {
       try {
@@ -548,6 +725,16 @@ async function startServer() {
     const idx = memoryStore.orders.findIndex((o) => o.id === orderId);
     if (idx !== -1) {
       memoryStore.orders[idx].status = status;
+      if (req.body.cancellationReason) {
+        memoryStore.orders[idx].cancellationReason = req.body.cancellationReason;
+      }
+      if (req.body.cancelledBy) {
+        memoryStore.orders[idx].cancelledBy = req.body.cancelledBy;
+      }
+      if (status === 'CANCELLED' || status === 'REFUNDED') {
+        memoryStore.orders[idx].cancelledAt = new Date().toISOString();
+      }
+      saveDatabaseToDisk();
     }
 
     if (spreadsheetId && auth) {

@@ -75,6 +75,7 @@ export function filterOrdersByDateRange(orders: Order[], fromDate: string, toDat
 export function formatOrdersForExport(orders: Order[]) {
   return orders.map((o) => {
     const itemNames = o.items.map((i) => `${i.quantity}x ${i.itemName}`).join('; ');
+    const isCancelled = o.status === 'CANCELLED' || o.status === 'REFUNDED';
     return {
       'Token No': `#${o.tokenNo}`,
       'Date & Time': new Date(o.createdAt).toLocaleString(),
@@ -84,9 +85,11 @@ export function formatOrdersForExport(orders: Order[]) {
       'Payment Mode': o.paymentMode,
       'Subtotal (₹)': o.subtotal,
       'GST (₹)': o.gstAmount,
-      'Total Amount (₹)': o.total,
+      'Total Amount (₹)': o.roundedTotal || o.total,
       'Status': o.status,
-      'Staff Name': o.staffName || 'Counter Cashier',
+      'Cancelled At': o.cancelledAt ? new Date(o.cancelledAt).toLocaleString() : '-',
+      'Cancellation Reason': o.cancellationReason || (isCancelled ? 'Cancelled' : '-'),
+      'Cancelled By / Staff': o.cancelledBy || o.staffName || 'Counter Cashier',
       'Device': o.deviceType,
       'Customer Notes': o.customerNotes || '-',
     };
@@ -107,10 +110,14 @@ export async function exportData(
   const filename = `The_Puff_Company_Sales_${fromDate}_to_${toDate}`;
   const formattedData = formatOrdersForExport(orders);
 
-  // Calculate totals
-  const totalRevenue = orders.reduce((sum, o) => sum + o.total, 0);
-  const totalSubtotal = orders.reduce((sum, o) => sum + o.subtotal, 0);
-  const totalGst = orders.reduce((sum, o) => sum + o.gstAmount, 0);
+  // Calculate totals - exclude cancelled orders from financial gross totals
+  const activeOrders = orders.filter((o) => o.status !== 'CANCELLED' && o.status !== 'REFUNDED');
+  const cancelledOrders = orders.filter((o) => o.status === 'CANCELLED' || o.status === 'REFUNDED');
+
+  const totalRevenue = activeOrders.reduce((sum, o) => sum + (o.roundedTotal || o.total), 0);
+  const totalSubtotal = activeOrders.reduce((sum, o) => sum + o.subtotal, 0);
+  const totalGst = activeOrders.reduce((sum, o) => sum + o.gstAmount, 0);
+  const cancelledRevenue = cancelledOrders.reduce((sum, o) => sum + (o.roundedTotal || o.total), 0);
 
   if (onProgress) onProgress('Preparing data export...');
 
@@ -134,7 +141,10 @@ export async function exportData(
         });
 
         // Summary row
-        csvContent += `\n"TOTALS","${orders.length} Orders","","","","","${totalSubtotal.toFixed(2)}","${totalGst.toFixed(2)}","${totalRevenue.toFixed(2)}","","","",""\n`;
+        csvContent += `\n"FINANCIAL TOTALS (Active Sales)","${activeOrders.length} Active Orders","","","","","${totalSubtotal.toFixed(2)}","${totalGst.toFixed(2)}","${totalRevenue.toFixed(2)}","","","","","",""\n`;
+        if (cancelledOrders.length > 0) {
+          csvContent += `"CANCELLED ORDERS AUDIT","${cancelledOrders.length} Cancelled Orders","","","","","-","-","₹${cancelledRevenue.toFixed(2)} (Voided)","EXCLUDED FROM REVENUE","","","","",""\n`;
+        }
 
         const encodedUri = encodeURI(csvContent);
         const link = document.createElement('a');
@@ -153,7 +163,8 @@ export async function exportData(
         // Add summary row at bottom
         XLSX.utils.sheet_add_aoa(worksheet, [
           [],
-          ['TOTALS', `${orders.length} Orders`, '', '', '', '', totalSubtotal, totalGst, totalRevenue]
+          ['FINANCIAL TOTALS (Active Sales)', `${activeOrders.length} Active Orders`, '', '', '', '', totalSubtotal, totalGst, totalRevenue, ''],
+          ['CANCELLED ORDERS (Audit)', `${cancelledOrders.length} Cancelled`, '', '', '', '', '', '', `Voided: Rs. ${cancelledRevenue.toFixed(2)}`, 'EXCLUDED FROM NET SALES']
         ], { origin: -1 });
 
         // Auto-fit column widths
@@ -183,7 +194,7 @@ export async function exportData(
         doc.setTextColor(244, 239, 232); // #f4efe8
         doc.setFontSize(16);
         doc.setFont('helvetica', 'bold');
-        doc.text('THE PUFF CO. — OFFICIAL SALES REPORT', 14, 12);
+        doc.text('THE PUFF CO. — OFFICIAL SALES & AUDIT REPORT', 14, 12);
 
         doc.setFontSize(9);
         doc.setFont('helvetica', 'normal');
@@ -194,31 +205,36 @@ export async function exportData(
         doc.rect(14, 28, 269, 14, 'F');
 
         doc.setTextColor(46, 33, 29);
-        doc.setFontSize(10);
+        doc.setFontSize(9);
         doc.setFont('helvetica', 'bold');
-        doc.text(`Total Orders: ${orders.length}`, 20, 36);
-        doc.text(`Subtotal: Rs. ${totalSubtotal.toFixed(2)}`, 80, 36);
-        doc.text(`GST Total: Rs. ${totalGst.toFixed(2)}`, 140, 36);
+        doc.text(`Active Orders: ${activeOrders.length}`, 18, 36);
+        doc.text(`Subtotal: Rs. ${totalSubtotal.toFixed(2)}`, 65, 36);
+        doc.text(`GST: Rs. ${totalGst.toFixed(2)}`, 115, 36);
         doc.setTextColor(140, 58, 39); // #8c3a27
-        doc.text(`Grand Total Revenue: Rs. ${totalRevenue.toFixed(2)}`, 200, 36);
+        doc.text(`Net Revenue: Rs. ${totalRevenue.toFixed(2)}`, 160, 36);
+        doc.setTextColor(180, 40, 30);
+        doc.text(`Cancelled: ${cancelledOrders.length} (Rs. ${cancelledRevenue.toFixed(2)})`, 220, 36);
 
         // Table Rows
-        const rows = orders.map((o) => [
-          `#${o.tokenNo}`,
-          new Date(o.createdAt).toLocaleDateString() + ' ' + new Date(o.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          o.orderType,
-          o.tableOrName || '-',
-          o.items.map((i) => `${i.quantity}x ${i.itemName}`).join(', '),
-          o.paymentMode,
-          `Rs. ${o.subtotal.toFixed(2)}`,
-          `Rs. ${o.gstAmount.toFixed(2)}`,
-          `Rs. ${o.total.toFixed(2)}`,
-          o.status,
-        ]);
+        const rows = orders.map((o) => {
+          const isCancelled = o.status === 'CANCELLED' || o.status === 'REFUNDED';
+          return [
+            `#${o.tokenNo}`,
+            new Date(o.createdAt).toLocaleDateString() + ' ' + new Date(o.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            o.orderType,
+            o.tableOrName || '-',
+            o.items.map((i) => `${i.quantity}x ${i.itemName}`).join(', '),
+            o.paymentMode,
+            `Rs. ${o.subtotal.toFixed(2)}`,
+            `Rs. ${o.gstAmount.toFixed(2)}`,
+            `Rs. ${(o.roundedTotal || o.total).toFixed(2)}`,
+            isCancelled ? `CANCELLED (${o.cancellationReason || 'Void'})` : o.status,
+          ];
+        });
 
         autoTable(doc, {
           startY: 46,
-          head: [['Token', 'Date/Time', 'Type', 'Table/Ref', 'Items', 'Pay Mode', 'Subtotal', 'GST', 'Total', 'Status']],
+          head: [['Token', 'Date/Time', 'Type', 'Table/Ref', 'Items', 'Pay Mode', 'Subtotal', 'GST', 'Total', 'Status / Reason']],
           body: rows,
           theme: 'grid',
           headStyles: {
@@ -245,34 +261,38 @@ export async function exportData(
         if (onProgress) onProgress('Preparing JSON payload...');
         const jsonContent = JSON.stringify(
           {
-            reportName: 'The Puff Co. Sales Report',
+            reportName: 'The Puff Co. Sales & Audit Report',
             generatedAt: new Date().toISOString(),
             dateRange: { fromDate, toDate },
-            summary: {
-              totalOrders: orders.length,
-              totalSubtotal,
-              totalGst,
-              totalRevenue,
+            financialSummary: {
+              activeOrdersCount: activeOrders.length,
+              cancelledOrdersCount: cancelledOrders.length,
+              subtotal: totalSubtotal,
+              gstTotal: totalGst,
+              netRevenue: totalRevenue,
+              cancelledRevenueVoided: cancelledRevenue,
             },
-            records: orders,
+            orders: orders,
           },
           null,
           2
         );
 
-        const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(jsonContent);
-        const downloadAnchor = document.createElement('a');
-        downloadAnchor.setAttribute('href', dataStr);
-        downloadAnchor.setAttribute('download', `${filename}.json`);
-        document.body.appendChild(downloadAnchor);
-        downloadAnchor.click();
-        downloadAnchor.remove();
+        const blob = new Blob([jsonContent], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.setAttribute('href', url);
+        link.setAttribute('download', `${filename}.json`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
         break;
       }
 
       case 'print': {
-        if (onProgress) onProgress('Opening printable view...');
-        generatePrintableReport(orders, fromDate, toDate, totalSubtotal, totalGst, totalRevenue);
+        if (onProgress) onProgress('Opening printable layout...');
+        generatePrintableReport(orders, fromDate, toDate, totalSubtotal, totalGst, totalRevenue, cancelledOrders.length, cancelledRevenue);
         break;
       }
     }
@@ -290,7 +310,9 @@ function generatePrintableReport(
   toDate: string,
   subtotal: number,
   gst: number,
-  total: number
+  total: number,
+  cancelledCount: number = 0,
+  cancelledTotal: number = 0
 ) {
   const printWindow = window.open('', '_blank');
   if (!printWindow) {
@@ -300,8 +322,10 @@ function generatePrintableReport(
 
   const rowsHtml = orders
     .map(
-      (o, i) => `
-    <tr class="${i % 2 === 0 ? 'bg-even' : ''}">
+      (o, i) => {
+        const isCancelled = o.status === 'CANCELLED' || o.status === 'REFUNDED';
+        return `
+    <tr class="${i % 2 === 0 ? 'bg-even' : ''} ${isCancelled ? 'cancelled-row' : ''}">
       <td>#${o.tokenNo}</td>
       <td>${new Date(o.createdAt).toLocaleString()}</td>
       <td>${o.orderType}</td>
@@ -310,10 +334,15 @@ function generatePrintableReport(
       <td><span class="badge badge-${o.paymentMode.toLowerCase()}">${o.paymentMode}</span></td>
       <td class="text-right">₹${o.subtotal.toFixed(2)}</td>
       <td class="text-right">₹${o.gstAmount.toFixed(2)}</td>
-      <td class="text-right bold">₹${o.total.toFixed(2)}</td>
-      <td><span class="status status-${o.status.toLowerCase()}">${o.status}</span></td>
+      <td class="text-right bold ${isCancelled ? 'line-through' : ''}">₹${(o.roundedTotal || o.total).toFixed(2)}</td>
+      <td>
+        <span class="status ${isCancelled ? 'status-cancelled' : `status-${o.status.toLowerCase()}`}">
+          ${isCancelled ? `CANCELLED (${o.cancellationReason || 'Void'})` : o.status}
+        </span>
+      </td>
     </tr>
-  `
+  `;
+      }
     )
     .join('');
 
@@ -321,7 +350,7 @@ function generatePrintableReport(
     <!DOCTYPE html>
     <html>
       <head>
-        <title>The Puff Co. - Print Report (${fromDate} to ${toDate})</title>
+        <title>The Puff Co. - Sales & Audit Report (${fromDate} to ${toDate})</title>
         <style>
           body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -356,7 +385,7 @@ function generatePrintableReport(
           }
           .summary-cards {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(5, 1fr);
             gap: 12px;
             margin-bottom: 20px;
           }
@@ -381,6 +410,9 @@ function generatePrintableReport(
           .card-val.highlight {
             color: #8c3a27;
           }
+          .card-val.cancelled {
+            color: #c53030;
+          }
           table {
             width: 100%;
             border-collapse: collapse;
@@ -401,8 +433,13 @@ function generatePrintableReport(
           tr.bg-even {
             background: #fdfbf7;
           }
+          tr.cancelled-row {
+            background: #fff5f5;
+            color: #9b2c2c;
+          }
           .text-right { text-align: right; }
           .bold { font-weight: 700; }
+          .line-through { text-decoration: line-through; opacity: 0.7; }
           .badge {
             display: inline-block;
             padding: 2px 6px;
@@ -417,6 +454,7 @@ function generatePrintableReport(
           .status-completed { color: #276749; }
           .status-pending { color: #d69e2e; }
           .status-preparing { color: #dd6b20; }
+          .status-cancelled { color: #c53030; background: #fed7d7; padding: 2px 5px; border-radius: 4px; }
           .footer {
             margin-top: 24px;
             padding-top: 12px;
@@ -441,7 +479,7 @@ function generatePrintableReport(
         <div class="header">
           <div>
             <h1 class="brand-title">THE PUFF CO.</h1>
-            <div class="brand-sub">Pure Veg Gourmet Puffs • Executive Sales & Analytics Report</div>
+            <div class="brand-sub">Pure Veg Gourmet Puffs • Sales & Audit Report</div>
           </div>
           <div class="meta">
             <div><strong>Date Range:</strong> ${fromDate} to ${toDate}</div>
@@ -451,11 +489,11 @@ function generatePrintableReport(
 
         <div class="summary-cards">
           <div class="card">
-            <div class="card-label">Total Orders</div>
-            <div class="card-val">${orders.length}</div>
+            <div class="card-label">Active Orders</div>
+            <div class="card-val">${orders.length - cancelledCount}</div>
           </div>
           <div class="card">
-            <div class="card-label">Subtotal</div>
+            <div class="card-label">Net Subtotal</div>
             <div class="card-val">₹${subtotal.toFixed(2)}</div>
           </div>
           <div class="card">
@@ -463,8 +501,12 @@ function generatePrintableReport(
             <div class="card-val">₹${gst.toFixed(2)}</div>
           </div>
           <div class="card">
-            <div class="card-label">Grand Total Revenue</div>
+            <div class="card-label">Net Sales Revenue</div>
             <div class="card-val highlight">₹${total.toFixed(2)}</div>
+          </div>
+          <div class="card">
+            <div class="card-label">Cancelled / Voided</div>
+            <div class="card-val cancelled">${cancelledCount} (₹${cancelledTotal.toFixed(2)})</div>
           </div>
         </div>
 
@@ -480,7 +522,7 @@ function generatePrintableReport(
               <th class="text-right">Subtotal</th>
               <th class="text-right">GST</th>
               <th class="text-right">Total</th>
-              <th>Status</th>
+              <th>Status / Reason</th>
             </tr>
           </thead>
           <tbody>
@@ -489,7 +531,7 @@ function generatePrintableReport(
         </table>
 
         <div class="footer">
-          Report generated automatically by The Puff Co. POS Billing System • Confidential Operational Data
+          Report generated automatically by The Puff Co. POS Billing System • Voided bills are excluded from daily sales tallies.
         </div>
 
         <script>

@@ -45,6 +45,8 @@ export const ExportDataPanel: React.FC<ExportDataPanelProps> = ({
   
   // Scope State: 'filtered' or 'all'
   const [exportScope, setExportScope] = useState<'filtered' | 'all'>('filtered');
+  // Status Filter: 'active' | 'cancelled' | 'all'
+  const [statusFilter, setStatusFilter] = useState<'active' | 'cancelled' | 'all'>('active');
 
   // Format Dropdown Open State
   const [isDropdownOpen, setIsDropdownOpen] = useState<boolean>(false);
@@ -91,10 +93,21 @@ export const ExportDataPanel: React.FC<ExportDataPanelProps> = ({
   const isInvalidDateOrder = Boolean(fromDate && toDate && new Date(fromDate) > new Date(toDate));
 
   // Filtered Orders Calculation
-  const filteredOrders = isValidRange ? filterOrdersByDateRange(orders, fromDate, toDate) : [];
-  const targetOrders = exportScope === 'all' ? orders : filteredOrders;
+  const dateScopedOrders = isValidRange 
+    ? (exportScope === 'all' ? orders : filterOrdersByDateRange(orders, fromDate, toDate))
+    : [];
 
-  const totalRevenue = targetOrders.reduce((sum, o) => sum + o.total, 0);
+  const targetOrders = dateScopedOrders.filter((o) => {
+    if (statusFilter === 'active') return o.status !== 'CANCELLED' && o.status !== 'REFUNDED';
+    if (statusFilter === 'cancelled') return o.status === 'CANCELLED' || o.status === 'REFUNDED';
+    return true;
+  });
+
+  const activeTargetOrders = targetOrders.filter((o) => o.status !== 'CANCELLED' && o.status !== 'REFUNDED');
+  const cancelledTargetOrders = targetOrders.filter((o) => o.status === 'CANCELLED' || o.status === 'REFUNDED');
+
+  const totalRevenue = activeTargetOrders.reduce((sum, o) => sum + (o.roundedTotal || o.total), 0);
+  const totalCancelledVoided = cancelledTargetOrders.reduce((sum, o) => sum + (o.roundedTotal || o.total), 0);
 
   // Handle Export Action
   const handleTriggerExport = async (format: ExportFormat) => {
@@ -274,50 +287,79 @@ export const ExportDataPanel: React.FC<ExportDataPanelProps> = ({
       </div>
 
       {/* SECTION 3: Export Scope Selection */}
-      <div className="space-y-2 mb-5">
-        <label className="text-xs font-bold text-[#a19284] flex items-center gap-1.5 uppercase tracking-wider font-['Cinzel']">
-          <Layers className="w-3.5 h-3.5 text-[#8c3a27]" />
-          <span>Export Dataset Scope</span>
-        </label>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
+        <div className="space-y-2">
+          <label className="text-xs font-bold text-[#a19284] flex items-center gap-1.5 uppercase tracking-wider font-['Cinzel']">
+            <Layers className="w-3.5 h-3.5 text-[#8c3a27]" />
+            <span>Dataset Time Scope</span>
+          </label>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <button
-            onClick={() => setExportScope('filtered')}
-            className={`p-3 rounded-2xl border text-left transition-all ${
-              exportScope === 'filtered'
-                ? 'bg-[#8c3a27]/10 border-[#8c3a27] ring-2 ring-[#8c3a27]/20'
-                : 'bg-white border-[#a19284]/30 hover:bg-[#f4efe8]'
-            }`}
-          >
-            <div className="flex items-center justify-between mb-1">
-              <span className="font-bold text-xs text-[#2e211d]">Filtered Records Only</span>
-              <span className="text-[10px] font-extrabold bg-[#8c3a27] text-[#f4efe8] px-2 py-0.5 rounded-full">
-                {filteredOrders.length} Orders
-              </span>
-            </div>
-            <p className="text-[11px] text-[#a19284]">
-              Export orders matching date range ({fromDate} to {toDate})
-            </p>
-          </button>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => setExportScope('filtered')}
+              className={`p-2.5 rounded-2xl border text-left transition-all ${
+                exportScope === 'filtered'
+                  ? 'bg-[#8c3a27]/10 border-[#8c3a27] ring-2 ring-[#8c3a27]/20'
+                  : 'bg-white border-[#a19284]/30 hover:bg-[#f4efe8]'
+              }`}
+            >
+              <div className="font-bold text-xs text-[#2e211d]">Filtered Date Range</div>
+              <p className="text-[10px] text-[#a19284] mt-0.5">Matching {fromDate} to {toDate}</p>
+            </button>
 
-          <button
-            onClick={() => setExportScope('all')}
-            className={`p-3 rounded-2xl border text-left transition-all ${
-              exportScope === 'all'
-                ? 'bg-[#8c3a27]/10 border-[#8c3a27] ring-2 ring-[#8c3a27]/20'
-                : 'bg-white border-[#a19284]/30 hover:bg-[#f4efe8]'
-            }`}
-          >
-            <div className="flex items-center justify-between mb-1">
-              <span className="font-bold text-xs text-[#2e211d]">All Store History Records</span>
-              <span className="text-[10px] font-extrabold bg-[#2e211d] text-[#f4efe8] px-2 py-0.5 rounded-full">
-                {orders.length} Total
-              </span>
-            </div>
-            <p className="text-[11px] text-[#a19284]">
-              Export entire sales history regardless of date filter
-            </p>
-          </button>
+            <button
+              onClick={() => setExportScope('all')}
+              className={`p-2.5 rounded-2xl border text-left transition-all ${
+                exportScope === 'all'
+                  ? 'bg-[#8c3a27]/10 border-[#8c3a27] ring-2 ring-[#8c3a27]/20'
+                  : 'bg-white border-[#a19284]/30 hover:bg-[#f4efe8]'
+              }`}
+            >
+              <div className="font-bold text-xs text-[#2e211d]">All Store History</div>
+              <p className="text-[10px] text-[#a19284] mt-0.5">{orders.length} total orders</p>
+            </button>
+          </div>
+        </div>
+
+        {/* Status Filter for Cancelled Orders Audit */}
+        <div className="space-y-2">
+          <label className="text-xs font-bold text-[#a19284] flex items-center gap-1.5 uppercase tracking-wider font-['Cinzel']">
+            <Filter className="w-3.5 h-3.5 text-[#8c3a27]" />
+            <span>Order Status / Audit Filter</span>
+          </label>
+
+          <div className="grid grid-cols-3 gap-1.5">
+            <button
+              onClick={() => setStatusFilter('active')}
+              className={`p-2 rounded-xl border text-center transition-all text-xs font-bold ${
+                statusFilter === 'active'
+                  ? 'bg-[#8c3a27] text-[#f4efe8] shadow-sm'
+                  : 'bg-white text-[#2e211d] border-[#a19284]/30 hover:bg-[#f4efe8]'
+              }`}
+            >
+              Active Sales
+            </button>
+            <button
+              onClick={() => setStatusFilter('cancelled')}
+              className={`p-2 rounded-xl border text-center transition-all text-xs font-bold ${
+                statusFilter === 'cancelled'
+                  ? 'bg-red-700 text-white shadow-sm'
+                  : 'bg-white text-red-700 border-red-200 hover:bg-red-50'
+              }`}
+            >
+              Cancelled Only
+            </button>
+            <button
+              onClick={() => setStatusFilter('all')}
+              className={`p-2 rounded-xl border text-center transition-all text-xs font-bold ${
+                statusFilter === 'all'
+                  ? 'bg-[#2e211d] text-[#f4efe8] shadow-sm'
+                  : 'bg-white text-[#2e211d] border-[#a19284]/30 hover:bg-[#f4efe8]'
+              }`}
+            >
+              All Orders
+            </button>
+          </div>
         </div>
       </div>
 
@@ -336,19 +378,32 @@ export const ExportDataPanel: React.FC<ExportDataPanelProps> = ({
                 {targetOrders.length} Order Tickets
               </span>
               <span className="text-xs text-[#e2d7c9] font-medium">
-                ({exportScope === 'filtered' ? `${fromDate} to ${toDate}` : 'All Time'})
+                ({statusFilter === 'active' ? 'Active Sales' : statusFilter === 'cancelled' ? 'Cancelled Audit Only' : 'All Active + Cancelled'})
               </span>
             </div>
           </div>
         </div>
 
-        <div className="sm:text-right border-t sm:border-t-0 border-[#a19284]/30 pt-2 sm:pt-0 w-full sm:w-auto">
-          <span className="text-[10px] text-[#a19284] font-bold uppercase tracking-wider block font-['Cinzel']">
-            Total Revenue Value
-          </span>
-          <span className="text-xl font-['Playfair_Display'] font-black text-[#e2d7c9]">
-            ₹{totalRevenue.toFixed(2)}
-          </span>
+        <div className="flex items-center gap-4 sm:text-right border-t sm:border-t-0 border-[#a19284]/30 pt-2 sm:pt-0 w-full sm:w-auto justify-between sm:justify-end">
+          <div>
+            <span className="text-[10px] text-[#a19284] font-bold uppercase tracking-wider block font-['Cinzel']">
+              Net Sales Value
+            </span>
+            <span className="text-xl font-['Playfair_Display'] font-black text-[#e2d7c9]">
+              ₹{totalRevenue.toFixed(2)}
+            </span>
+          </div>
+
+          {cancelledTargetOrders.length > 0 && (
+            <div className="pl-4 border-l border-white/10">
+              <span className="text-[10px] text-red-400 font-bold uppercase tracking-wider block font-['Cinzel']">
+                Voided / Cancelled
+              </span>
+              <span className="text-lg font-['Playfair_Display'] font-black text-red-300">
+                {cancelledTargetOrders.length} (₹{totalCancelledVoided.toFixed(2)})
+              </span>
+            </div>
+          )}
         </div>
       </div>
 

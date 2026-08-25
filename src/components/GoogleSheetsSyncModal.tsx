@@ -20,10 +20,33 @@ interface Props {
   syncStatus: SyncStatus;
 }
 
+export function extractGoogleSheetId(input: string): string {
+  if (!input) return '';
+  const trimmed = input.trim();
+  
+  // 1. Matches standard Google Sheet URLs: /spreadsheets/d/([a-zA-Z0-9-_]+)
+  const sheetMatch = trimmed.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  if (sheetMatch && sheetMatch[1]) {
+    return sheetMatch[1];
+  }
+
+  // 2. Matches raw ID string directly (alphanumeric, dashes, underscores >= 20 chars)
+  if (/^[a-zA-Z0-9-_]{20,}$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  return trimmed;
+}
+
+export function isGoogleAppsScriptUrl(input: string): boolean {
+  if (!input) return false;
+  return input.trim().includes('script.google.com/macros/s/');
+}
+
 export const GoogleSheetsSyncModal: React.FC<Props> = ({ isOpen, onClose, syncStatus }) => {
-  const [customSheetId, setCustomSheetId] = useState('');
+  const [customSheetInput, setCustomSheetInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [copiedKey, setCopiedKey] = useState(false);
 
   if (!isOpen) return null;
@@ -31,17 +54,38 @@ export const GoogleSheetsSyncModal: React.FC<Props> = ({ isOpen, onClose, syncSt
   const handleConnectSheet = async () => {
     setIsLoading(true);
     setMessage(null);
+
+    const input = customSheetInput.trim();
+
+    if (isGoogleAppsScriptUrl(input)) {
+      setMessage({
+        type: 'error',
+        text: 'You entered a Google Apps Script URL (/macros/s/.../exec). Please paste your Google Sheet link instead (e.g., https://docs.google.com/spreadsheets/d/1fafxs4NinP5zX5UGMbCftfmZX0xpJ_CwtqZyo-0hBQ4/edit).'
+      });
+      setIsLoading(false);
+      return;
+    }
+
+    const cleanSpreadsheetId = extractGoogleSheetId(input);
+
     try {
-      const res = await livePuffStore.connectGoogleSheets(customSheetId.trim() || undefined);
-      if (res.spreadsheetId) {
-        setMessage({
-          type: 'success',
-          text: `Connected to Google Sheet! Spreadsheet ID: ${res.spreadsheetId}`
-        });
+      const res = await livePuffStore.connectGoogleSheets(cleanSpreadsheetId || undefined);
+      if (res && res.spreadsheetId) {
+        if (res.authenticated) {
+          setMessage({
+            type: 'success',
+            text: `Successfully connected to Google Sheet! (Spreadsheet ID: ${res.spreadsheetId})`
+          });
+        } else {
+          setMessage({
+            type: 'info',
+            text: `Spreadsheet ID saved: ${res.spreadsheetId}. To enable live read/write sync with Google servers, please click "Authorize Google Account (OAuth)" above.`
+          });
+        }
       } else {
         setMessage({
           type: 'error',
-          text: res.error || 'Failed to connect to Google Sheets API.'
+          text: res?.error || 'Failed to connect to Google Sheets API.'
         });
       }
     } catch (e: any) {
@@ -168,29 +212,36 @@ export const GoogleSheetsSyncModal: React.FC<Props> = ({ isOpen, onClose, syncSt
 
             <div className="pt-2">
               <label className="block text-xs font-semibold text-[#a19284] mb-1">
-                Or Attach Existing Google Sheet ID:
+                Paste Google Sheet Link or Spreadsheet ID:
               </label>
               <div className="flex gap-2">
                 <input
                   type="text"
-                  value={customSheetId}
-                  onChange={(e) => setCustomSheetId(e.target.value)}
-                  placeholder="e.g. 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"
+                  value={customSheetInput}
+                  onChange={(e) => setCustomSheetInput(e.target.value)}
+                  placeholder="https://docs.google.com/spreadsheets/d/1fafxs4NinP5zX5UGMbCftfmZX0xpJ_CwtqZyo-0hBQ4/edit"
                   className="flex-1 bg-[#f4efe8] border border-[#a19284]/50 rounded-xl px-3 py-2 text-xs text-[#2e211d] focus:outline-none focus:border-[#8c3a27] font-mono"
                 />
                 <button
                   onClick={handleConnectSheet}
-                  disabled={!customSheetId.trim() || isLoading}
-                  className="bg-[#2e211d] hover:bg-[#1b1311] disabled:opacity-40 text-[#f4efe8] font-bold px-3 py-2 rounded-xl text-xs transition-colors"
+                  disabled={!customSheetInput.trim() || isLoading}
+                  className="bg-[#2e211d] hover:bg-[#1b1311] disabled:opacity-40 text-[#f4efe8] font-bold px-3 py-2 rounded-xl text-xs transition-colors shrink-0"
                 >
                   Link Sheet
                 </button>
               </div>
+              <p className="text-[11px] text-[#a19284] mt-1">
+                Tip: You can paste the complete Google Sheet URL from your browser address bar.
+              </p>
             </div>
 
             {message && (
               <div className={`p-3 rounded-lg text-xs font-medium ${
-                message.type === 'success' ? 'bg-[#8c3a27]/10 border border-[#8c3a27]/30 text-[#8c3a27]' : 'bg-red-100 border border-red-300 text-red-800'
+                message.type === 'success' 
+                  ? 'bg-[#8c3a27]/10 border border-[#8c3a27]/30 text-[#8c3a27]' 
+                  : message.type === 'info'
+                  ? 'bg-amber-50 border border-amber-300 text-amber-900'
+                  : 'bg-red-100 border border-red-300 text-red-800'
               }`}>
                 {message.text}
               </div>

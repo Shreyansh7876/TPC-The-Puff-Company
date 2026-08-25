@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { PuffItem, Ingredient, Order, SyncStatus } from './types';
 import { livePuffStore } from './services/store';
 import { Header, AppViewMode } from './components/Header';
@@ -16,6 +16,8 @@ import { PWAPrompt } from './components/PWAPrompt';
 import { GoogleSheetsSyncModal } from './components/GoogleSheetsSyncModal';
 import { ExportDataModal } from './components/ExportDataModal';
 import { CustomerManagement } from './components/CustomerManagement';
+import { StorageAlertBanner } from './components/StorageAlertBanner';
+import { useKioskProtection } from './hooks/useKioskProtection';
 
 export default function App() {
   // Default view is the single unified POS module ('laptop_pos' / Billing) which auto-adapts
@@ -51,6 +53,33 @@ export default function App() {
   // PWA Install Prompt State
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [showPwaBanner, setShowPwaBanner] = useState<boolean>(true);
+
+  // Check if any modal is active for Kiosk modal-close trapping
+  const hasActiveModals = isSheetsModalOpen || isExportModalOpen || upiModalState.isOpen || receiptOrder !== null;
+
+  const handleCloseActiveModal = useCallback(() => {
+    if (upiModalState.isOpen) {
+      setUpiModalState({ isOpen: false, amount: 0, tokenNo: 0, pendingOrder: undefined });
+    } else if (receiptOrder !== null) {
+      setReceiptOrder(null);
+    } else if (isSheetsModalOpen) {
+      setIsSheetsModalOpen(false);
+    } else if (isExportModalOpen) {
+      setIsExportModalOpen(false);
+    }
+  }, [upiModalState.isOpen, receiptOrder, isSheetsModalOpen, isExportModalOpen]);
+
+  const handleResetToDefaultView = useCallback(() => {
+    setCurrentView('laptop_pos');
+  }, []);
+
+  // Enforce full Kiosk-style protection
+  useKioskProtection({
+    currentView,
+    onViewResetToDefault: handleResetToDefaultView,
+    hasActiveModals,
+    onCloseActiveModal: handleCloseActiveModal,
+  });
 
   // Register PWA Service Worker & Install Prompt Listener
   useEffect(() => {
@@ -114,6 +143,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#f4efe8] text-[#2e211d] font-sans flex flex-col selection:bg-[#8c3a27] selection:text-[#f4efe8]">
+      <StorageAlertBanner />
       {/* App Navigation Header */}
       <Header
         currentView={currentView}

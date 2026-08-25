@@ -77,6 +77,9 @@ export interface Order {
   splitDetails?: { cash: number; upi: number; card: number };
   status: OrderStatus;
   createdAt: string; // ISO string
+  cancelledAt?: string; // ISO string when cancelled
+  cancellationReason?: string;
+  cancelledBy?: string;
   customerNotes?: string;
   staffName?: string;
   deviceType: 'mobile' | 'laptop';
@@ -93,6 +96,8 @@ export interface DailySalesSummary {
   pureCashTotal?: number;
   pureUpiTotal?: number;
   pureCardTotal?: number;
+  cancelledOrdersCount: number;
+  cancelledRevenueTotal: number;
   splitBreakdown?: { cash: number; upi: number; card: number };
   topSellingItems: { name: string; count: number; revenue: number }[];
   grossProfit?: number;

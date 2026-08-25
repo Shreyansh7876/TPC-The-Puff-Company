@@ -158,6 +158,13 @@ class SettingsStore {
       localStorage.setItem('tpc_app_settings', JSON.stringify(this.settings));
       localStorage.setItem('tpc_activity_logs', JSON.stringify(this.activityLogs.slice(0, 100)));
       localStorage.setItem('tpc_audit_logs', JSON.stringify(this.auditLogs.slice(0, 200)));
+
+      // Sync settings to backend database
+      fetch('/api/store/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings: this.settings })
+      }).catch(() => {});
     } catch (e) {
       console.error('Failed to write settings to localStorage:', e);
     }
