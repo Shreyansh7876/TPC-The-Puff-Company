@@ -241,9 +241,26 @@ export interface AnalyticsSettings {
   defaultDateRange: 'today' | 'last7' | 'last30' | 'thisMonth';
 }
 
+export type ThermalPaperWidth = '58mm' | '80mm' | '72mm';
+export type ThermalFontSize = 'COMPACT' | 'STANDARD' | 'LARGE';
+
+export interface PrintingSettings {
+  paperWidth: ThermalPaperWidth;
+  autoPrintInvoice: boolean;
+  autoPrintKOT: boolean;
+  printCustomerDetails: boolean;
+  printCustomerNotes: boolean;
+  printKitchenNotesOnKOT: boolean;
+  printItemNotesOnKOT?: boolean;
+  fontSize: ThermalFontSize;
+  feedLines: number;
+  enableBeepOnPrint: boolean;
+}
+
 export interface AppMasterSettings {
   storeProfile: StoreProfileSettings;
   billing: BillingInvoiceSettings;
+  printing: PrintingSettings;
   inventory: InventorySettings;
   menu: MenuSettings;
   kot: KOTSettings;

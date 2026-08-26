@@ -37,7 +37,11 @@ import {
   Tag,
   ChevronRight,
   Eye,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Printer,
+  Copy,
+  Bluetooth,
+  Flame
 } from 'lucide-react';
 import { settingsStore } from '../services/settingsStore';
 import { livePuffStore } from '../services/store';
@@ -47,8 +51,14 @@ import {
   InventoryAuditLog,
   PuffItem,
   Ingredient,
-  IngredientRequirement
+  IngredientRequirement,
+  ThermalPaperWidth,
+  ThermalFontSize,
+  Order
 } from '../types';
+import { ThermalInvoiceTicket } from './ThermalInvoiceTicket';
+import { ThermalKOTTicket } from './ThermalKOTTicket';
+import { generateInvoicePlainText, generateKOTPlainText } from '../utils/thermalPrinter';
 
 export const SettingsPanel: React.FC = () => {
   const [settings, setSettings] = useState<AppMasterSettings>(settingsStore.getSettings());
@@ -61,8 +71,12 @@ export const SettingsPanel: React.FC = () => {
 
   // Active Settings Tab
   const [activeTab, setActiveTab] = useState<
-    'store' | 'billing' | 'inventory' | 'menu' | 'kot' | 'pos' | 'payments' | 'backup' | 'analytics'
+    'store' | 'billing' | 'printing' | 'inventory' | 'menu' | 'kot' | 'pos' | 'payments' | 'backup' | 'analytics'
   >('store');
+
+  // Thermal Simulator State
+  const [simulatorTab, setSimulatorTab] = useState<'invoice' | 'kot'>('invoice');
+  const [copiedRawText, setCopiedRawText] = useState<boolean>(false);
 
   // Save Banner Notification
   const [saveBanner, setSaveBanner] = useState<{ show: boolean; message: string }>({
@@ -205,6 +219,82 @@ export const SettingsPanel: React.FC = () => {
   const handleUpdateBilling = (field: string, val: any) => {
     settingsStore.updateSection('billing', { [field]: val });
     triggerSaveNotification('Billing & Invoice settings updated!');
+  };
+
+  const handleUpdatePrinting = (field: string, val: any) => {
+    settingsStore.updateSection('printing', { [field]: val });
+    triggerSaveNotification('Thermal Printing settings updated!');
+  };
+
+  const sampleTestOrder: Order = {
+    id: 'ORD_TEST_58MM',
+    tokenNo: 101,
+    invoiceNo: `${settings.billing.invoicePrefix}1001`,
+    orderType: 'Dine In',
+    tableOrName: 'Table #4',
+    customerName: 'Rahul Sharma',
+    customerMobile: '+91 98765 43210',
+    items: [
+      {
+        id: 'puff_01',
+        itemId: 'puff_01',
+        itemName: 'Classic Gujarati Puff',
+        category: 'Signature Puffs',
+        price: 45,
+        quantity: 2,
+        notes: 'Extra crispy, less spicy'
+      },
+      {
+        id: 'puff_02',
+        itemId: 'puff_02',
+        itemName: 'Cheese Corn Burst Puff',
+        category: 'Signature Puffs',
+        price: 75,
+        quantity: 1,
+      },
+      {
+        id: 'chaas_01',
+        itemId: 'chaas_01',
+        itemName: 'Masala Chaas (Cold)',
+        category: 'Beverages',
+        price: 20,
+        quantity: 2,
+      }
+    ],
+    subtotal: 205,
+    discount: 0,
+    gstEnabled: true,
+    gstAmount: 10.25,
+    cgstAmount: 5.13,
+    sgstAmount: 5.12,
+    total: 215.25,
+    roundedTotal: 215,
+    paymentMode: 'UPI',
+    status: 'PENDING',
+    createdAt: new Date().toISOString(),
+    deviceType: 'laptop',
+    staffName: 'Main Cashier',
+    customerNotes: 'Please serve cold chaas first with ice.',
+  };
+
+  const handleTestPrint = (mode: 'invoice' | 'kot') => {
+    document.body.setAttribute('data-print-mode', mode);
+    window.print();
+    setTimeout(() => {
+      document.body.removeAttribute('data-print-mode');
+    }, 1000);
+  };
+
+  const handleCopySimulatorText = () => {
+    const rawText =
+      simulatorTab === 'invoice'
+        ? generateInvoicePlainText(sampleTestOrder, settings)
+        : generateKOTPlainText(sampleTestOrder, settings);
+
+    navigator.clipboard.writeText(rawText).then(() => {
+      setCopiedRawText(true);
+      setTimeout(() => setCopiedRawText(false), 2000);
+    });
   };
 
   const handleUpdateInventory = (field: string, val: any) => {
@@ -518,6 +608,7 @@ export const SettingsPanel: React.FC = () => {
         {[
           { id: 'store', label: 'Store Profile', icon: Store },
           { id: 'billing', label: 'Billing & Invoice', icon: Receipt },
+          { id: 'printing', label: 'Thermal Printing', icon: Printer },
           { id: 'inventory', label: 'Inventory & Audit', icon: Package },
           { id: 'menu', label: 'Menu & Categories', icon: Utensils },
           { id: 'kot', label: 'Kitchen KOT', icon: ChefHat },
@@ -881,6 +972,470 @@ export const SettingsPanel: React.FC = () => {
                     onChange={(e) => handleUpdateBilling('printUpiQrOnReceipt', e.target.checked)}
                     className="w-5 h-5 accent-[#8c3a27]"
                   />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB: THERMAL PRINTING & KOT */}
+      {activeTab === 'printing' && (
+        <div className="space-y-6 animate-in fade-in duration-200">
+          {/* Top Banner */}
+          <div className="bg-[#2e211d] text-[#f4efe8] p-5 rounded-3xl shadow-md flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <Printer className="w-5 h-5 text-[#e2d7c9]" />
+                <h3 className="font-['Playfair_Display'] font-black text-lg text-[#f4efe8]">
+                  Thermal Printer & Kitchen KOT Engine
+                </h3>
+              </div>
+              <p className="text-xs text-[#a19284] max-w-2xl leading-relaxed">
+                Configure 58mm (2-inch) mini Bluetooth thermal printers and 80mm (3-inch) POS desktop printers. Text wrapping, ESC/POS alignment, and font sizes are mathematically calibrated to eliminate horizontal cutoff.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => handleTestPrint('invoice')}
+                className="px-3.5 py-2 bg-[#8c3a27] hover:bg-[#732f1f] text-[#f4efe8] rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm active:scale-95"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Test Print Invoice</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleTestPrint('kot')}
+                className="px-3.5 py-2 bg-[#e2d7c9] hover:bg-[#d6c6b3] text-[#2e211d] rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm active:scale-95"
+              >
+                <ChefHat className="w-3.5 h-3.5 text-[#8c3a27]" />
+                <span>Test Print KOT</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* Left Column: Settings Controls (7 cols) */}
+            <div className="lg:col-span-7 space-y-6">
+              {/* 1. Paper Width & Dimension */}
+              <div className="bg-white p-5 rounded-3xl border border-[#a19284]/30 shadow-sm space-y-4">
+                <div className="flex items-center justify-between border-b border-[#a19284]/20 pb-3">
+                  <div className="flex items-center gap-2">
+                    <Sliders className="w-5 h-5 text-[#8c3a27]" />
+                    <h3 className="font-['Playfair_Display'] font-black text-base text-[#2e211d]">
+                      1. Paper Roll Width & Format
+                    </h3>
+                  </div>
+                  <span className="text-[11px] font-bold text-[#8c3a27] bg-[#f4efe8] px-2.5 py-0.5 rounded-lg border border-[#a19284]/30">
+                    Active: {settings.printing?.paperWidth || '58mm'}
+                  </span>
+                </div>
+
+                <p className="text-xs text-[#a19284]">
+                  Select the physical thermal paper roll width installed in your printer.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  {/* 58mm Option */}
+                  <label
+                    onClick={() => handleUpdatePrinting('paperWidth', '58mm')}
+                    className={`p-4 rounded-2xl border-2 cursor-pointer transition-all flex flex-col justify-between gap-2 ${
+                      (settings.printing?.paperWidth || '58mm') === '58mm'
+                        ? 'border-[#8c3a27] bg-[#8c3a27]/5 shadow-sm'
+                        : 'border-[#a19284]/30 bg-[#f4efe8]/30 hover:border-[#8c3a27]/50'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Smartphone className="w-4 h-4 text-[#8c3a27]" />
+                        <span className="font-bold text-sm text-[#2e211d]">58mm (2-Inch)</span>
+                      </div>
+                      <input
+                        type="radio"
+                        name="paperWidth"
+                        checked={(settings.printing?.paperWidth || '58mm') === '58mm'}
+                        onChange={() => handleUpdatePrinting('paperWidth', '58mm')}
+                        className="accent-[#8c3a27] w-4 h-4"
+                      />
+                    </div>
+                    <p className="text-[11px] text-[#a19284] leading-relaxed">
+                      Recommended for portable Bluetooth mini receipt printers, battery printers, and compact billing counters (32 chars/line).
+                    </p>
+                    <div className="flex items-center gap-1.5 pt-1 text-[10px] font-bold text-[#8c3a27]">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Zero-Margin Cutoff Protection</span>
+                    </div>
+                  </label>
+
+                  {/* 80mm Option */}
+                  <label
+                    onClick={() => handleUpdatePrinting('paperWidth', '80mm')}
+                    className={`p-4 rounded-2xl border-2 cursor-pointer transition-all flex flex-col justify-between gap-2 ${
+                      settings.printing?.paperWidth === '80mm'
+                        ? 'border-[#8c3a27] bg-[#8c3a27]/5 shadow-sm'
+                        : 'border-[#a19284]/30 bg-[#f4efe8]/30 hover:border-[#8c3a27]/50'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Store className="w-4 h-4 text-[#8c3a27]" />
+                        <span className="font-bold text-sm text-[#2e211d]">80mm (3-Inch)</span>
+                      </div>
+                      <input
+                        type="radio"
+                        name="paperWidth"
+                        checked={settings.printing?.paperWidth === '80mm'}
+                        onChange={() => handleUpdatePrinting('paperWidth', '80mm')}
+                        className="accent-[#8c3a27] w-4 h-4"
+                      />
+                    </div>
+                    <p className="text-[11px] text-[#a19284] leading-relaxed">
+                      Recommended for heavy-duty desktop USB/LAN POS printers, commercial billing desks, and high-speed kitchen printers (48 chars/line).
+                    </p>
+                    <div className="flex items-center gap-1.5 pt-1 text-[10px] font-bold text-[#2e211d]">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-[#8c3a27]" />
+                      <span>High Density Layout</span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              {/* 2. Automated Printing Rules */}
+              <div className="bg-white p-5 rounded-3xl border border-[#a19284]/30 shadow-sm space-y-4">
+                <div className="flex items-center gap-2 border-b border-[#a19284]/20 pb-3">
+                  <Sparkles className="w-5 h-5 text-[#8c3a27]" />
+                  <h3 className="font-['Playfair_Display'] font-black text-base text-[#2e211d]">
+                    2. Automated Print Triggers
+                  </h3>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="flex items-center justify-between p-3.5 bg-[#f4efe8]/60 rounded-2xl border border-[#a19284]/30">
+                    <div className="pr-2">
+                      <span className="text-xs font-bold text-[#2e211d] block">Auto-Print Invoice</span>
+                      <span className="text-[10px] text-[#a19284] block mt-0.5">
+                        Instantly pop up receipt print dialog upon completing checkout
+                      </span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={settings.printing?.autoPrintInvoice ?? false}
+                      onChange={(e) => handleUpdatePrinting('autoPrintInvoice', e.target.checked)}
+                      className="w-5 h-5 accent-[#8c3a27] shrink-0"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between p-3.5 bg-[#f4efe8]/60 rounded-2xl border border-[#a19284]/30">
+                    <div className="pr-2">
+                      <span className="text-xs font-bold text-[#2e211d] block">Auto-Print Kitchen KOT</span>
+                      <span className="text-[10px] text-[#a19284] block mt-0.5">
+                        Immediately route kitchen order ticket to thermal printer
+                      </span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={settings.printing?.autoPrintKOT ?? false}
+                      onChange={(e) => handleUpdatePrinting('autoPrintKOT', e.target.checked)}
+                      className="w-5 h-5 accent-[#8c3a27] shrink-0"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* 3. Invoice Ticket Details & Visibility */}
+              <div className="bg-white p-5 rounded-3xl border border-[#a19284]/30 shadow-sm space-y-4">
+                <div className="flex items-center gap-2 border-b border-[#a19284]/20 pb-3">
+                  <Receipt className="w-5 h-5 text-[#8c3a27]" />
+                  <h3 className="font-['Playfair_Display'] font-black text-base text-[#2e211d]">
+                    3. Invoice Print Layout & Details
+                  </h3>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="flex items-center justify-between p-3.5 bg-[#f4efe8]/60 rounded-2xl border border-[#a19284]/30">
+                    <div className="pr-2">
+                      <span className="text-xs font-bold text-[#2e211d] block">Print Customer Details</span>
+                      <span className="text-[10px] text-[#a19284] block mt-0.5">
+                        Include customer name & mobile number on invoice
+                      </span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={settings.printing?.printCustomerDetails ?? true}
+                      onChange={(e) => handleUpdatePrinting('printCustomerDetails', e.target.checked)}
+                      className="w-5 h-5 accent-[#8c3a27] shrink-0"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between p-3.5 bg-[#f4efe8]/60 rounded-2xl border border-[#a19284]/30">
+                    <div className="pr-2">
+                      <span className="text-xs font-bold text-[#2e211d] block">Print Customer Notes</span>
+                      <span className="text-[10px] text-[#a19284] block mt-0.5">
+                        Include special delivery or table instructions on bill
+                      </span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={settings.printing?.printCustomerNotes ?? true}
+                      onChange={(e) => handleUpdatePrinting('printCustomerNotes', e.target.checked)}
+                      className="w-5 h-5 accent-[#8c3a27] shrink-0"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between p-3.5 bg-[#f4efe8]/60 rounded-2xl border border-[#a19284]/30">
+                    <div className="pr-2">
+                      <span className="text-xs font-bold text-[#2e211d] block">Print Store Logo on Bill</span>
+                      <span className="text-[10px] text-[#a19284] block mt-0.5">
+                        Render store branding logo at the top of receipt
+                      </span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={settings.billing?.printLogoOnReceipt ?? true}
+                      onChange={(e) => handleUpdateBilling('printLogoOnReceipt', e.target.checked)}
+                      className="w-5 h-5 accent-[#8c3a27] shrink-0"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between p-3.5 bg-[#f4efe8]/60 rounded-2xl border border-[#a19284]/30">
+                    <div className="pr-2">
+                      <span className="text-xs font-bold text-[#2e211d] block">Print UPI QR Code on Bill</span>
+                      <span className="text-[10px] text-[#a19284] block mt-0.5">
+                        Render dynamic or static UPI QR code on printed receipt
+                      </span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={settings.billing?.printUpiQrOnReceipt ?? true}
+                      onChange={(e) => handleUpdateBilling('printUpiQrOnReceipt', e.target.checked)}
+                      className="w-5 h-5 accent-[#8c3a27] shrink-0"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-[#a19284] block mb-1">Receipt Footer Note</label>
+                  <input
+                    type="text"
+                    value={settings.billing?.receiptFooterText || ''}
+                    onChange={(e) => handleUpdateBilling('receiptFooterText', e.target.value)}
+                    placeholder="e.g. Thank you for dining with us! Visit again."
+                    className="w-full px-3.5 py-2 bg-[#f4efe8]/50 border border-[#a19284]/40 rounded-xl text-xs font-bold text-[#2e211d] focus:outline-none focus:border-[#8c3a27]"
+                  />
+                </div>
+              </div>
+
+              {/* 4. Kitchen Order Ticket (KOT) Rules */}
+              <div className="bg-white p-5 rounded-3xl border border-[#a19284]/30 shadow-sm space-y-4">
+                <div className="flex items-center justify-between border-b border-[#a19284]/20 pb-3">
+                  <div className="flex items-center gap-2">
+                    <ChefHat className="w-5 h-5 text-[#8c3a27]" />
+                    <h3 className="font-['Playfair_Display'] font-black text-base text-[#2e211d]">
+                      4. Kitchen Order Ticket (KOT) Rules
+                    </h3>
+                  </div>
+                  <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-200">
+                    Simple & Clean KOT
+                  </span>
+                </div>
+
+                {/* KOT Strict Minimal Standards Notice */}
+                <div className="p-3.5 bg-[#f4efe8] rounded-2xl border border-[#a19284]/30 text-xs space-y-1.5">
+                  <div className="flex items-center gap-1.5 font-bold text-[#2e211d]">
+                    <ShieldCheck className="w-4 h-4 text-[#8c3a27]" />
+                    <span>Simple KOT Operational Layout:</span>
+                  </div>
+                  <ul className="text-[11px] text-[#2e211d]/80 space-y-1 list-disc pl-5">
+                    <li><strong className="text-[#8c3a27]">Essential Info:</strong> Clean &quot;K.O.T&quot; heading, Token #, Order Type, Table #, Date & Time, and [Qty x] Item names.</li>
+                    <li><strong className="text-emerald-700">Clutter-Free:</strong> Store branding, customer PII, staff/device IDs, checkbox columns, slogan footers, and all pricing are eliminated so kitchen staff reads tickets instantly.</li>
+                  </ul>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="flex items-center justify-between p-3.5 bg-[#f4efe8]/60 rounded-2xl border border-[#a19284]/30">
+                    <div className="pr-2">
+                      <span className="text-xs font-bold text-[#2e211d] block">Print Item Preparation Notes</span>
+                      <span className="text-[10px] text-[#a19284] block mt-0.5">
+                        Show item customization notes (e.g. &quot;Less spicy&quot;) on KOT
+                      </span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={settings.printing?.printItemNotesOnKOT ?? true}
+                      onChange={(e) => handleUpdatePrinting('printItemNotesOnKOT', e.target.checked)}
+                      className="w-5 h-5 accent-[#8c3a27] shrink-0"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between p-3.5 bg-[#f4efe8]/60 rounded-2xl border border-[#a19284]/30">
+                    <div className="pr-2">
+                      <span className="text-xs font-bold text-[#2e211d] block">Print Special Order Notes</span>
+                      <span className="text-[10px] text-[#a19284] block mt-0.5">
+                        Show customer special order instructions on KOT
+                      </span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={settings.printing?.printCustomerNotes ?? true}
+                      onChange={(e) => handleUpdatePrinting('printCustomerNotes', e.target.checked)}
+                      className="w-5 h-5 accent-[#8c3a27] shrink-0"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* 5. Thermal Physical Feed & Font Tuning */}
+              <div className="bg-white p-5 rounded-3xl border border-[#a19284]/30 shadow-sm space-y-4">
+                <div className="flex items-center gap-2 border-b border-[#a19284]/20 pb-3">
+                  <Sliders className="w-5 h-5 text-[#8c3a27]" />
+                  <h3 className="font-['Playfair_Display'] font-black text-base text-[#2e211d]">
+                    5. Physical Paper Feed & Tear-Off Tuning
+                  </h3>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-bold text-[#a19284] block mb-1">
+                      Thermal Text Density / Font Size
+                    </label>
+                    <select
+                      value={settings.printing?.fontSize || 'STANDARD'}
+                      onChange={(e) => handleUpdatePrinting('fontSize', e.target.value)}
+                      className="w-full px-3.5 py-2 bg-[#f4efe8]/50 border border-[#a19284]/40 rounded-xl text-xs font-bold text-[#2e211d] focus:outline-none focus:border-[#8c3a27]"
+                    >
+                      <option value="COMPACT">Compact (Maximum text fitting)</option>
+                      <option value="STANDARD">Standard (Recommended balance)</option>
+                      <option value="LARGE">Large (High legibility for distance)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-[#a19284] block mb-1">
+                      Tear-Off Blank Feed Lines (After Ticket)
+                    </label>
+                    <select
+                      value={settings.printing?.feedLines ?? 2}
+                      onChange={(e) => handleUpdatePrinting('feedLines', Number(e.target.value))}
+                      className="w-full px-3.5 py-2 bg-[#f4efe8]/50 border border-[#a19284]/40 rounded-xl text-xs font-bold text-[#2e211d] focus:outline-none focus:border-[#8c3a27]"
+                    >
+                      <option value={0}>0 lines (Immediate stop)</option>
+                      <option value={1}>1 line</option>
+                      <option value={2}>2 lines (Standard tear-off gap)</option>
+                      <option value={3}>3 lines (Generous tear-off margin)</option>
+                      <option value={4}>4 lines</option>
+                      <option value={5}>5 lines</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Right Column: Live Interactive Thermal Simulator & Bluetooth Guide (5 cols) */}
+            <div className="lg:col-span-5 space-y-6">
+              {/* Simulator Card */}
+              <div className="bg-white p-5 rounded-3xl border border-[#a19284]/30 shadow-sm space-y-4 sticky top-6">
+                <div className="flex items-center justify-between border-b border-[#a19284]/20 pb-3">
+                  <div className="flex items-center gap-2">
+                    <Eye className="w-5 h-5 text-[#8c3a27]" />
+                    <h3 className="font-['Playfair_Display'] font-black text-base text-[#2e211d]">
+                      Live Thermal Roll Preview
+                    </h3>
+                  </div>
+                  <span className="text-[10px] font-bold text-[#2e211d] bg-[#e2d7c9] px-2 py-0.5 rounded-full">
+                    {settings.printing?.paperWidth || '58mm'} Roll
+                  </span>
+                </div>
+
+                {/* Simulator Tab Buttons */}
+                <div className="flex items-center gap-1.5 p-1 bg-[#f4efe8] rounded-xl border border-[#a19284]/30">
+                  <button
+                    type="button"
+                    onClick={() => setSimulatorTab('invoice')}
+                    className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      simulatorTab === 'invoice'
+                        ? 'bg-[#8c3a27] text-[#f4efe8] shadow-sm'
+                        : 'text-[#2e211d] hover:bg-[#e2d7c9]'
+                    }`}
+                  >
+                    Customer Invoice
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSimulatorTab('kot')}
+                    className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      simulatorTab === 'kot'
+                        ? 'bg-[#8c3a27] text-[#f4efe8] shadow-sm'
+                        : 'text-[#2e211d] hover:bg-[#e2d7c9]'
+                    }`}
+                  >
+                    Kitchen KOT
+                  </button>
+                </div>
+
+                {/* Simulated Paper Roll Display */}
+                <div className="flex justify-center bg-[#2e211d]/5 p-4 rounded-2xl border-2 border-dashed border-[#a19284]/40 max-h-[500px] overflow-y-auto">
+                  {simulatorTab === 'invoice' ? (
+                    <ThermalInvoiceTicket
+                      order={sampleTestOrder}
+                      settings={settings}
+                      paperWidth={settings.printing?.paperWidth || '58mm'}
+                    />
+                  ) : (
+                    <ThermalKOTTicket
+                      order={sampleTestOrder}
+                      settings={settings}
+                      paperWidth={settings.printing?.paperWidth || '58mm'}
+                    />
+                  )}
+                </div>
+
+                {/* Simulator Action Buttons */}
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => handleTestPrint(simulatorTab)}
+                    className="w-full py-2.5 bg-[#8c3a27] hover:bg-[#732f1f] text-[#f4efe8] rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-md active:scale-95"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Print This Sample</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCopySimulatorText}
+                    className="w-full py-2.5 bg-[#e2d7c9] hover:bg-[#d6c6b3] text-[#2e211d] rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95"
+                  >
+                    {copiedRawText ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-700" />
+                        <span className="text-emerald-800">Copied Text!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>Copy ESC/POS</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Bluetooth Thermal Printer Hardware Guide */}
+                <div className="p-4 bg-[#f4efe8] rounded-2xl border border-[#a19284]/30 space-y-2.5">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-[#2e211d]">
+                    <Bluetooth className="w-4 h-4 text-[#8c3a27]" />
+                    <span>Bluetooth Printer Setup Instructions:</span>
+                  </div>
+                  <ol className="text-[11px] text-[#2e211d]/80 space-y-1.5 list-decimal pl-4 leading-relaxed">
+                    <li>
+                      <strong>Android Devices:</strong> Pair your Bluetooth printer via Android Settings. Download the free <em>RawBT</em> or <em>ESC POS Print Service</em> app to enable system-wide instant printing.
+                    </li>
+                    <li>
+                      <strong>Windows / Mac:</strong> Pair via Bluetooth or plug USB cable. In Windows Printer Properties, select paper size <strong>58mm x Continuous</strong> or <strong>80mm x Continuous</strong> and set margins to 0.
+                    </li>
+                    <li>
+                      <strong>Browser Print Setting:</strong> In the browser print dialog, uncheck &quot;Headers and Footers&quot; and set Margins to <strong>None / Minimum</strong> for clean roll printing.
+                    </li>
+                  </ol>
                 </div>
               </div>
             </div>

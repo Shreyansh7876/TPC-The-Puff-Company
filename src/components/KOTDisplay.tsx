@@ -9,11 +9,13 @@ import {
   AlertCircle,
   BellRing,
   Ban,
-  RotateCcw
+  RotateCcw,
+  Printer
 } from 'lucide-react';
 import { Order, OrderStatus } from '../types';
 import { livePuffStore } from '../services/store';
 import { CancelOrderModal } from './CancelOrderModal';
+import { PrintKOTModal } from './PrintKOTModal';
 
 interface KOTDisplayProps {
   orders: Order[];
@@ -22,6 +24,7 @@ interface KOTDisplayProps {
 export const KOTDisplay: React.FC<KOTDisplayProps> = ({ orders }) => {
   const [filterStatus, setFilterStatus] = useState<string>('ACTIVE');
   const [cancellingOrder, setCancellingOrder] = useState<Order | null>(null);
+  const [printingOrder, setPrintingOrder] = useState<Order | null>(null);
 
   useEffect(() => {
     const pendingCount = orders.filter((o) => o.status === 'PENDING').length;
@@ -211,10 +214,21 @@ export const KOTDisplay: React.FC<KOTDisplayProps> = ({ orders }) => {
                   </div>
                 </div>
 
-                {/* Table & Staff Info */}
+                {/* Table & Staff Info & Print KOT */}
                 <div className="flex items-center justify-between text-xs bg-[#f4efe8] p-2 rounded-xl border border-[#a19284]/30 mb-3 font-semibold text-[#2e211d]">
-                  <span>Type: <strong className="text-[#8c3a27]">{order.orderType}</strong></span>
-                  <span>Ref: <strong className="text-[#2e211d]">{order.tableOrName}</strong></span>
+                  <div className="flex items-center gap-2">
+                    <span>Type: <strong className="text-[#8c3a27]">{order.orderType}</strong></span>
+                    <span>•</span>
+                    <span>Ref: <strong className="text-[#2e211d]">{order.tableOrName}</strong></span>
+                  </div>
+                  <button
+                    onClick={() => setPrintingOrder(order)}
+                    className="px-2.5 py-1 bg-[#e2d7c9] hover:bg-[#8c3a27] hover:text-[#f4efe8] text-[#2e211d] text-[11px] font-bold rounded-lg border border-[#a19284]/40 flex items-center gap-1 transition-all shadow-xs active:scale-95 shrink-0"
+                    title="Print Kitchen Order Ticket"
+                  >
+                    <Printer className="w-3.5 h-3.5 text-[#8c3a27] group-hover:text-white" />
+                    <span>Print KOT</span>
+                  </button>
                 </div>
 
                 {/* Cancelled Audit Info Box */}
@@ -360,6 +374,15 @@ export const KOTDisplay: React.FC<KOTDisplayProps> = ({ orders }) => {
           onClose={() => setCancellingOrder(null)}
           onSuccess={() => setCancellingOrder(null)}
           staffName="Kitchen Staff"
+        />
+      )}
+
+      {/* Print KOT Modal */}
+      {printingOrder && (
+        <PrintKOTModal
+          order={printingOrder}
+          isOpen={Boolean(printingOrder)}
+          onClose={() => setPrintingOrder(null)}
         />
       )}
     </div>

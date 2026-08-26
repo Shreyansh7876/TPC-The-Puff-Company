@@ -28,6 +28,18 @@ const INITIAL_SETTINGS: AppMasterSettings = {
     printLogoOnReceipt: true,
     printUpiQrOnReceipt: true,
   },
+  printing: {
+    paperWidth: '58mm',
+    autoPrintInvoice: false,
+    autoPrintKOT: false,
+    printCustomerDetails: true,
+    printCustomerNotes: true,
+    printKitchenNotesOnKOT: true,
+    printItemNotesOnKOT: true,
+    fontSize: 'STANDARD',
+    feedLines: 2,
+    enableBeepOnPrint: true,
+  },
   inventory: {
     lowStockAlertThreshold: 150,
     autoDeductOnSale: true,
@@ -134,6 +146,10 @@ class SettingsStore {
           storeProfile: {
             ...INITIAL_SETTINGS.storeProfile,
             ...(parsed.storeProfile || {})
+          },
+          printing: {
+            ...INITIAL_SETTINGS.printing,
+            ...(parsed.printing || {})
           }
         };
       }

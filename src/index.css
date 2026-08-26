@@ -77,3 +77,50 @@ input, textarea, [contenteditable="true"] {
 .border-stone-taupe { border-color: #a19284; }
 .border-rust { border-color: #8c3a27; }
 .border-espresso { border-color: #2e211d; }
+
+/* ----------------------------------------------------
+   THERMAL PRINTER (58mm & 80mm ESC/POS) PRINT STYLES
+   ---------------------------------------------------- */
+@page {
+  margin: 0;
+  size: auto;
+}
+
+@media print {
+  html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-family: 'Courier New', Courier, monospace !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Target printable thermal elements */
+  #thermal-receipt,
+  #thermal-invoice-ticket,
+  #thermal-kot-ticket {
+    display: block !important;
+    margin: 0 !important;
+    padding: 2mm !important;
+    box-shadow: none !important;
+    border: none !important;
+    color: #000000 !important;
+    background: #ffffff !important;
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+
+  /* Force pure black borders and text */
+  #thermal-invoice-ticket *,
+  #thermal-kot-ticket *,
+  #thermal-receipt * {
+    color: #000000 !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+    border-color: #000000 !important;
+    -webkit-text-fill-color: #000000 !important;
+  }
+}
+

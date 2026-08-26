@@ -1,194 +1,173 @@
-import React from 'react';
-import { Order } from '../types';
-import { Printer, X, QrCode } from 'lucide-react';
-import { BrandLogo } from './BrandLogo';
+import React, { useState } from 'react';
+import { Order, ThermalPaperWidth } from '../types';
+import { Printer, X, Copy, Check, Receipt, ChefHat, FileText, Sparkles } from 'lucide-react';
 import { settingsStore } from '../services/settingsStore';
+import { ThermalInvoiceTicket } from './ThermalInvoiceTicket';
+import { ThermalKOTTicket } from './ThermalKOTTicket';
+import { generateInvoicePlainText, generateKOTPlainText } from '../utils/thermalPrinter';
 
 interface PrintReceiptModalProps {
   order: Order | null;
   onClose: () => void;
+  defaultTab?: 'invoice' | 'kot';
 }
 
-export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({ order, onClose }) => {
+export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
+  order,
+  onClose,
+  defaultTab = 'invoice',
+}) => {
   if (!order) return null;
 
   const settings = settingsStore.getSettings();
-  const store = settings.storeProfile;
-  const billing = settings.billing;
+  const [activeTab, setActiveTab] = useState<'invoice' | 'kot'>(defaultTab);
+  const [selectedWidth, setSelectedWidth] = useState<ThermalPaperWidth>(
+    settings.printing?.paperWidth || '58mm'
+  );
+  const [copied, setCopied] = useState(false);
 
-  const handlePrint = () => {
+  const handlePrint = (mode: 'invoice' | 'kot' = activeTab) => {
+    document.body.setAttribute('data-print-mode', mode);
     window.print();
+    setTimeout(() => {
+      document.body.removeAttribute('data-print-mode');
+    }, 1000);
   };
 
-  const roundedAmount = order.roundedTotal ?? order.total;
+  const handleCopyESC = () => {
+    const rawText =
+      activeTab === 'invoice'
+        ? generateInvoicePlainText(order, settings)
+        : generateKOTPlainText(order, settings);
+
+    navigator.clipboard.writeText(rawText).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#2e211d]/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-      <div className="bg-[#f4efe8] rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-[#a19284]/40 text-[#2e211d] relative overflow-hidden">
-        <button
-          onClick={onClose}
-          className="absolute top-4 right-4 text-[#a19284] hover:text-[#2e211d] bg-[#e2d7c9] p-2 rounded-full transition-colors print:hidden"
-        >
-          <X className="w-5 h-5" />
-        </button>
-
-        {/* Printable Thermal Receipt Card */}
-        <div id="thermal-receipt" className="p-4 bg-white border border-[#a19284]/30 rounded-2xl font-mono text-xs shadow-inner">
-          {/* Header with Brand Identity */}
-          <div className="text-center pb-3 border-b border-dashed border-[#a19284]/50 flex flex-col items-center">
-            {billing.printLogoOnReceipt && store.storeLogoUrl ? (
-              <div className="mb-2 flex justify-center">
-                <img 
-                  src={store.storeLogoUrl} 
-                  alt={store.storeName} 
-                  className="max-h-14 max-w-[150px] object-contain" 
-                />
-              </div>
-            ) : null}
-            <h2 className="text-sm font-black text-[#2e211d] font-['Playfair_Display'] uppercase">{store.storeName}</h2>
-            <p className="text-[10px] text-[#8c3a27] font-['Cinzel'] tracking-wider uppercase font-bold mt-0.5">
-              {store.storeTagline}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#2e211d]/75 backdrop-blur-sm p-3 sm:p-4 animate-in fade-in duration-200">
+      <div className="bg-[#f4efe8] rounded-3xl max-w-md w-full p-4 sm:p-6 shadow-2xl border border-[#a19284]/40 text-[#2e211d] relative max-h-[92vh] flex flex-col">
+        {/* Header Bar */}
+        <div className="flex items-center justify-between pb-3 border-b border-[#a19284]/30 print:hidden">
+          <div>
+            <h3 className="text-sm font-black font-['Playfair_Display'] text-[#2e211d]">
+              Thermal Print Manager
+            </h3>
+            <p className="text-[11px] text-[#8c3a27] font-bold">
+              Token #{order.tokenNo} {order.invoiceNo ? `• ${order.invoiceNo}` : ''}
             </p>
-            <p className="text-[10px] text-[#a19284] mt-0.5 text-center leading-tight max-w-[240px]">
-              {store.address}
-            </p>
-            <p className="text-[10px] text-[#a19284]">Ph: {store.contactNumber}</p>
-            {store.gstNumber && <p className="text-[9px] text-[#2e211d] font-bold">GSTIN: {store.gstNumber}</p>}
-            {store.fssaiNumber && <p className="text-[9px] text-[#a19284]">FSSAI Lic #: {store.fssaiNumber}</p>}
           </div>
 
-          {/* Ticket & Invoice Metadata */}
-          <div className="py-2.5 border-b border-dashed border-[#a19284]/50 space-y-1 text-[#2e211d]">
-            <div className="flex justify-between font-bold text-[#8c3a27] text-sm">
-              <span>TOKEN #{order.tokenNo}</span>
-              <span className="uppercase text-[#2e211d]">{order.orderType}</span>
-            </div>
-            {order.invoiceNo && (
-              <div className="flex justify-between text-[11px] font-bold text-[#2e211d]">
-                <span>Invoice No:</span>
-                <span>{order.invoiceNo}</span>
-              </div>
-            )}
-            <div className="flex justify-between text-[11px]">
-              <span className="text-[#a19284]">Table / Ref:</span>
-              <span className="font-bold text-[#2e211d]">{order.tableOrName}</span>
-            </div>
-            <div className="flex justify-between text-[10px] text-[#a19284]">
-              <span>Date: {new Date(order.createdAt).toLocaleDateString('en-IN')}</span>
-              <span>Time: {new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-            </div>
-            <div className="flex justify-between text-[10px] text-[#a19284]">
-              <span>Staff: {order.staffName || 'Counter'}</span>
-              <span>Pay: <strong className="text-[#2e211d]">{order.paymentMode}</strong></span>
-            </div>
+          <button
+            onClick={onClose}
+            className="text-[#a19284] hover:text-[#2e211d] bg-[#e2d7c9] p-1.5 rounded-full transition-colors"
+            aria-label="Close"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Tab Switcher: Tax Invoice vs Kitchen KOT */}
+        <div className="pt-3 pb-2 flex items-center justify-between gap-2 print:hidden">
+          <div className="flex bg-[#e2d7c9] p-1 rounded-2xl border border-[#a19284]/30 flex-1">
+            <button
+              onClick={() => setActiveTab('invoice')}
+              className={`flex-1 py-1.5 px-3 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-all ${
+                activeTab === 'invoice'
+                  ? 'bg-[#8c3a27] text-white shadow-sm'
+                  : 'text-[#2e211d] hover:text-[#8c3a27]'
+              }`}
+            >
+              <Receipt className="w-3.5 h-3.5" />
+              <span>Tax Invoice</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('kot')}
+              className={`flex-1 py-1.5 px-3 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-all ${
+                activeTab === 'kot'
+                  ? 'bg-[#2e211d] text-white shadow-sm'
+                  : 'text-[#2e211d] hover:text-[#8c3a27]'
+              }`}
+            >
+              <ChefHat className="w-3.5 h-3.5" />
+              <span>Kitchen KOT</span>
+            </button>
           </div>
 
-          {/* Item List */}
-          <div className="py-3 border-b border-dashed border-[#a19284]/50 space-y-1.5">
-            <div className="flex justify-between font-bold text-[10px] text-[#a19284] uppercase tracking-wider pb-1">
-              <span>ITEM</span>
-              <span>QTY x PRICE</span>
-              <span>AMT</span>
-            </div>
-            {order.items.map((item, idx) => (
-              <div key={idx} className="space-y-0.5">
-                <div className="flex justify-between font-semibold text-[#2e211d]">
-                  <span className="truncate pr-2">{item.itemName}</span>
-                  <span className="text-[#a19284] whitespace-nowrap">{item.quantity} x {store.currencySymbol}{item.price}</span>
-                  <span className="font-bold text-[#2e211d] pl-2">{store.currencySymbol}{item.quantity * item.price}</span>
-                </div>
-                {item.notes && (
-                  <p className="text-[10px] text-[#8c3a27] bg-[#e2d7c9]/50 px-1.5 py-0.5 rounded italic">
-                    Note: {item.notes}
-                  </p>
-                )}
-              </div>
+          {/* Paper Width Toggle */}
+          <div className="flex bg-[#e2d7c9] p-1 rounded-2xl border border-[#a19284]/30">
+            {(['58mm', '80mm'] as ThermalPaperWidth[]).map((w) => (
+              <button
+                key={w}
+                onClick={() => setSelectedWidth(w)}
+                className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition-all ${
+                  selectedWidth === w
+                    ? 'bg-white text-[#8c3a27] font-black shadow-sm'
+                    : 'text-[#2e211d] hover:text-[#8c3a27]'
+                }`}
+              >
+                {w}
+              </button>
             ))}
-          </div>
-
-          {/* Totals & Tax Split */}
-          <div className="py-2.5 border-b border-dashed border-[#a19284]/50 space-y-1">
-            <div className="flex justify-between text-[#a19284]">
-              <span>Subtotal:</span>
-              <span>{store.currencySymbol}{order.subtotal.toFixed(2)}</span>
-            </div>
-
-            {order.gstEnabled && billing.enableSplitTax ? (
-              <>
-                <div className="flex justify-between text-[#a19284] text-[10px]">
-                  <span>CGST ({(billing.gstRatePercent / 2).toFixed(1)}%):</span>
-                  <span>{store.currencySymbol}{(order.cgstAmount || order.gstAmount / 2).toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between text-[#a19284] text-[10px]">
-                  <span>SGST ({(billing.gstRatePercent / 2).toFixed(1)}%):</span>
-                  <span>{store.currencySymbol}{(order.sgstAmount || order.gstAmount / 2).toFixed(2)}</span>
-                </div>
-              </>
-            ) : order.gstEnabled ? (
-              <div className="flex justify-between text-[#a19284]">
-                <span>GST ({billing.gstRatePercent}%):</span>
-                <span>{store.currencySymbol}{order.gstAmount.toFixed(2)}</span>
-              </div>
-            ) : (
-              <p className="text-[9px] text-[#a19284] italic text-right">
-                (Prices Incl. of all Taxes)
-              </p>
-            )}
-
-            {order.discount > 0 && (
-              <div className="flex justify-between text-[#8c3a27] font-semibold">
-                <span>Discount:</span>
-                <span>-{store.currencySymbol}{order.discount.toFixed(2)}</span>
-              </div>
-            )}
-
-            <div className="flex justify-between font-black text-sm text-[#2e211d] pt-1 border-t border-[#a19284]/30">
-              <span>GRAND TOTAL:</span>
-              <span className="text-[#8c3a27]">{store.currencySymbol}{roundedAmount.toFixed(2)}</span>
-            </div>
-          </div>
-
-          {/* QR Code Placeholder if enabled */}
-          {billing.printUpiQrOnReceipt && (
-            <div className="my-2.5 p-2 bg-[#f4efe8] rounded-xl border border-[#a19284]/30 flex items-center justify-between">
-              <div className="text-[10px] text-[#2e211d]">
-                <span className="font-bold block text-[#8c3a27]">Scan to Pay via UPI</span>
-                <span className="text-[9px] text-[#a19284]">{settings.payments.upiId}</span>
-              </div>
-              <div className="w-8 h-8 bg-white border border-[#a19284]/40 rounded flex items-center justify-center">
-                <QrCode className="w-6 h-6 text-[#8c3a27]" />
-              </div>
-            </div>
-          )}
-
-          {/* Customer Notes */}
-          {order.customerNotes && (
-            <div className="py-2 text-[10px] text-[#2e211d] bg-[#e2d7c9]/40 p-2 rounded-lg border border-[#a19284]/30 mt-2">
-              <strong className="text-[#8c3a27]">Customer Note:</strong> {order.customerNotes}
-            </div>
-          )}
-
-          {/* Footer */}
-          <div className="text-center pt-3 text-[10px] text-[#a19284] font-sans space-y-0.5 leading-tight">
-            <p className="font-bold text-[#2e211d]">{billing.receiptFooterText}</p>
           </div>
         </div>
 
-        {/* Buttons */}
-        <div className="mt-5 space-y-2 print:hidden">
-          <button
-            onClick={handlePrint}
-            className="w-full py-3 bg-[#8c3a27] hover:bg-[#732f1f] active:scale-98 text-[#f4efe8] font-bold rounded-2xl shadow-lg flex items-center justify-center gap-2 transition-all"
-          >
-            <Printer className="w-5 h-5" />
-            <span>Print Thermal Invoice</span>
-          </button>
-          <button
-            onClick={onClose}
-            className="w-full py-2.5 text-[#a19284] hover:text-[#2e211d] text-xs font-bold"
-          >
-            Close
-          </button>
+        {/* Live Thermal Receipt Preview Box */}
+        <div className="flex-1 overflow-y-auto my-2 p-3 bg-[#e2d7c9]/40 rounded-2xl border border-[#a19284]/30 flex justify-center shadow-inner">
+          <div className="bg-white p-3 rounded-xl shadow-md border border-[#a19284]/40 print:shadow-none print:border-none print:p-0">
+            {activeTab === 'invoice' ? (
+              <ThermalInvoiceTicket order={order} paperWidth={selectedWidth} />
+            ) : (
+              <ThermalKOTTicket order={order} paperWidth={selectedWidth} />
+            )}
+          </div>
+        </div>
+
+        {/* Print & Action Controls */}
+        <div className="pt-3 border-t border-[#a19284]/30 space-y-2 print:hidden">
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => handlePrint('invoice')}
+              className={`py-3 font-black rounded-2xl shadow-md flex items-center justify-center gap-1.5 transition-all text-xs ${
+                activeTab === 'invoice'
+                  ? 'bg-[#8c3a27] hover:bg-[#732f1f] text-white active:scale-98'
+                  : 'bg-[#2e211d] hover:bg-[#1b1311] text-white'
+              }`}
+            >
+              <Printer className="w-4 h-4" />
+              <span>Print Invoice ({selectedWidth})</span>
+            </button>
+
+            <button
+              onClick={() => handlePrint('kot')}
+              className={`py-3 font-black rounded-2xl shadow-md flex items-center justify-center gap-1.5 transition-all text-xs ${
+                activeTab === 'kot'
+                  ? 'bg-[#8c3a27] hover:bg-[#732f1f] text-white active:scale-98'
+                  : 'bg-[#2e211d] hover:bg-[#1b1311] text-white'
+              }`}
+            >
+              <ChefHat className="w-4 h-4" />
+              <span>Print KOT Ticket</span>
+            </button>
+          </div>
+
+          <div className="flex gap-2">
+            <button
+              onClick={handleCopyESC}
+              className="flex-1 py-2 bg-[#e2d7c9] hover:bg-[#d6c6b3] text-[#2e211d] font-bold rounded-xl border border-[#a19284]/40 text-xs flex items-center justify-center gap-1.5 transition-colors"
+            >
+              {copied ? <Check className="w-3.5 h-3.5 text-green-700" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>{copied ? 'Copied Raw Text!' : `Copy Raw ${activeTab === 'invoice' ? 'Invoice' : 'KOT'} Text`}</span>
+            </button>
+            <button
+              onClick={onClose}
+              className="px-4 py-2 bg-transparent text-[#a19284] hover:text-[#2e211d] font-bold text-xs rounded-xl"
+            >
+              Close
+            </button>
+          </div>
         </div>
       </div>
     </div>
