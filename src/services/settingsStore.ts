@@ -62,6 +62,7 @@ const INITIAL_SETTINGS: AppMasterSettings = {
     numberFormat: 'TOKEN_ONLY',
     soundNotifications: true,
     orderPriority: 'FIFO',
+    tokenStartNumber: 101,
   },
   pos: {
     defaultViewMode: 'laptop_pos',
@@ -150,6 +151,10 @@ class SettingsStore {
           printing: {
             ...INITIAL_SETTINGS.printing,
             ...(parsed.printing || {})
+          },
+          kot: {
+            ...INITIAL_SETTINGS.kot,
+            ...(parsed.kot || {})
           }
         };
       }

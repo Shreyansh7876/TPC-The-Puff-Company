@@ -14,6 +14,7 @@ const KEYS = {
   AUDIT_LOGS: 'tpc_persistent_audit_logs_v2',
   OFFLINE_QUEUE: 'tpc_persistent_offline_queue_v2',
   LAST_SYNC: 'tpc_persistent_last_sync_v2',
+  TOKEN_COUNTER: 'tpc_persistent_token_counter_v2',
 };
 
 export interface SyncQueueItem {
@@ -162,6 +163,29 @@ class PersistentDatabaseService {
       console.warn('Failed to parse offline queue from LocalStorage:', e);
     }
     return [];
+  }
+
+  public getSyncTokenCounter(): number | null {
+    if (typeof window === 'undefined') return null;
+    try {
+      const val = localStorage.getItem(KEYS.TOKEN_COUNTER);
+      if (val !== null) {
+        const num = parseInt(val, 10);
+        if (!isNaN(num) && num > 0) return num;
+      }
+    } catch (e) {
+      console.warn('Failed to get token counter from LocalStorage:', e);
+    }
+    return null;
+  }
+
+  public saveTokenCounter(counter: number): void {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.setItem(KEYS.TOKEN_COUNTER, String(counter));
+    } catch (e) {
+      console.warn('Failed to save token counter to LocalStorage:', e);
+    }
   }
 
   // --- DUAL-SHIELD IMMEDIATE WRITERS (LocalStorage + IndexedDB) ---

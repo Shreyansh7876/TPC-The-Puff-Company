@@ -41,7 +41,9 @@ import {
   Printer,
   Copy,
   Bluetooth,
-  Flame
+  Flame,
+  RotateCcw,
+  Hash
 } from 'lucide-react';
 import { settingsStore } from '../services/settingsStore';
 import { livePuffStore } from '../services/store';
@@ -118,14 +120,30 @@ export const SettingsPanel: React.FC = () => {
   const [selectedRecipeIngId, setSelectedRecipeIngId] = useState<string>('');
   const [selectedRecipeQty, setSelectedRecipeQty] = useState<number | ''>(1);
 
+  // KOT Token Sequence State
+  const [tokenStartInput, setTokenStartInput] = useState<number>(
+    settingsStore.getSettings().kot?.tokenStartNumber || 101
+  );
+  const [nextTokenNumber, setNextTokenNumber] = useState<number>(
+    livePuffStore.getNextTokenNumber()
+  );
+
   // Subscribe to settings & store updates
   useEffect(() => {
-    const unsubSettings = settingsStore.subscribeSettings(setSettings);
+    const unsubSettings = settingsStore.subscribeSettings((newSettings) => {
+      setSettings(newSettings);
+      if (newSettings.kot?.tokenStartNumber) {
+        setTokenStartInput(newSettings.kot.tokenStartNumber);
+      }
+    });
     const unsubActivity = settingsStore.subscribeActivityLogs(setActivityLogs);
     const unsubAudit = settingsStore.subscribeAuditLogs(setAuditLogs);
 
     const unsubMenu = livePuffStore.subscribeMenu(setMenuItems);
     const unsubIngredients = livePuffStore.subscribeIngredients(setIngredients);
+    const unsubOrders = livePuffStore.subscribeOrders(() => {
+      setNextTokenNumber(livePuffStore.getNextTokenNumber());
+    });
 
     return () => {
       unsubSettings();
@@ -133,6 +151,7 @@ export const SettingsPanel: React.FC = () => {
       unsubAudit();
       unsubMenu();
       unsubIngredients();
+      unsubOrders();
     };
   }, []);
 
@@ -305,6 +324,26 @@ export const SettingsPanel: React.FC = () => {
   const handleUpdateKOT = (field: string, val: any) => {
     settingsStore.updateSection('kot', { [field]: val });
     triggerSaveNotification('Kitchen (KOT) settings updated!');
+  };
+
+  const handleUpdateTokenStartNumber = (val: number) => {
+    setTokenStartInput(val);
+    if (!isNaN(val) && val > 0) {
+      settingsStore.updateSection('kot', { tokenStartNumber: Math.floor(val) });
+      triggerSaveNotification(`Starting token number saved as #${Math.floor(val)}`);
+    }
+  };
+
+  const handleResetTokenSequence = () => {
+    const startNum = Number(tokenStartInput);
+    if (isNaN(startNum) || startNum <= 0) {
+      alert('Please enter a valid starting token number (greater than 0).');
+      return;
+    }
+    const validatedNum = Math.floor(startNum);
+    const newNext = livePuffStore.resetTokenSequence(validatedNum);
+    setNextTokenNumber(newNext);
+    triggerSaveNotification(`Token sequence reset! Next order will issue Token #${newNext}.`);
   };
 
   const handleUpdatePOS = (field: string, val: any) => {
@@ -1815,6 +1854,77 @@ export const SettingsPanel: React.FC = () => {
                 <option value="FIFO">First In, First Out (Chronological)</option>
                 <option value="DINE_IN_FIRST">Prioritize Dine In Orders First</option>
               </select>
+            </div>
+          </div>
+
+          {/* Token Sequence Reset Section */}
+          <div className="pt-4 border-t border-[#a19284]/20 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Hash className="w-4 h-4 text-[#8c3a27]" />
+                <h4 className="text-xs font-bold uppercase tracking-wider text-[#2e211d]">
+                  Token Sequence & Counter Reset
+                </h4>
+              </div>
+              <span className="text-[11px] font-black text-[#8c3a27] bg-[#8c3a27]/10 px-2.5 py-0.5 rounded-full border border-[#8c3a27]/20">
+                Next Token to Issue: #{nextTokenNumber}
+              </span>
+            </div>
+
+            <div className="p-4 bg-[#f4efe8]/70 rounded-2xl border border-[#a19284]/30 space-y-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
+                <div>
+                  <label htmlFor="token-start-from-input" className="text-xs font-bold text-[#2e211d] block mb-1">
+                    Token Number Starts From
+                  </label>
+                  <p className="text-[10px] text-[#a19284] mb-2">
+                    Set the starting token sequence number (e.g. 101, 1, 501)
+                  </p>
+                  <div className="relative">
+                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs font-black text-[#a19284]">
+                      #
+                    </span>
+                    <input
+                      id="token-start-from-input"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={tokenStartInput}
+                      onChange={(e) => handleUpdateTokenStartNumber(parseInt(e.target.value, 10) || 0)}
+                      placeholder="101"
+                      className="w-full pl-8 pr-3.5 py-2.5 bg-white border border-[#a19284]/40 rounded-xl text-sm font-black text-[#2e211d] focus:outline-none focus:border-[#8c3a27]"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col justify-end">
+                  <button
+                    id="reset-token-sequence-btn"
+                    type="button"
+                    onClick={handleResetTokenSequence}
+                    className="w-full py-2.5 px-4 bg-[#8c3a27] hover:bg-[#732f1f] active:scale-[0.98] text-[#f4efe8] rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Reset Token Sequence</span>
+                  </button>
+                  <p className="text-[10px] text-[#a19284] text-center mt-2">
+                    Next new order will immediately start from Token #{tokenStartInput || 101}
+                  </p>
+                </div>
+              </div>
+
+              {/* Notice / Sequence Rules */}
+              <div className="p-3 bg-white/80 rounded-xl border border-[#a19284]/20 text-[11px] text-[#2e211d]/80 space-y-1">
+                <div className="flex items-center gap-1.5 font-bold text-[#8c3a27]">
+                  <Info className="w-3.5 h-3.5" />
+                  <span>Sequence Rules:</span>
+                </div>
+                <ul className="list-disc pl-5 space-y-0.5 text-[10px] text-[#2e211d]/70">
+                  <li>Existing order history and past token numbers remain completely unchanged.</li>
+                  <li>Only newly generated tokens from this point forward will follow the new sequence.</li>
+                  <li>The configured starting number is saved permanently for future sessions and sequence resets.</li>
+                </ul>
+              </div>
             </div>
           </div>
         </div>

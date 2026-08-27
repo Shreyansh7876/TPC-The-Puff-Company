@@ -196,6 +196,7 @@ export interface KOTSettings {
   numberFormat: 'TOKEN_ONLY' | 'KOT_PREFIX';
   soundNotifications: boolean;
   orderPriority: 'FIFO' | 'DINE_IN_FIRST';
+  tokenStartNumber: number;
 }
 
 export interface POSSettings {

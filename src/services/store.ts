@@ -33,12 +33,43 @@ class LivePuffStore {
   }
 
   private recalculateTokenCounter() {
+    const savedTokenCounter = persistentDb.getSyncTokenCounter();
+    if (savedTokenCounter !== null && !isNaN(savedTokenCounter) && savedTokenCounter > 0) {
+      this.tokenCounter = savedTokenCounter;
+      return;
+    }
+    const settings = settingsStore.getSettings();
+    const startNum = settings.kot?.tokenStartNumber || 101;
     if (this.orders.length > 0) {
-      const maxToken = this.orders.reduce((max, o) => Math.max(max, o.tokenNo || 0), 100);
+      const maxToken = this.orders.reduce((max, o) => Math.max(max, o.tokenNo || 0), startNum - 1);
       this.tokenCounter = maxToken + 1;
     } else {
-      this.tokenCounter = 101;
+      this.tokenCounter = startNum;
     }
+    persistentDb.saveTokenCounter(this.tokenCounter);
+  }
+
+  public resetTokenSequence(customStart?: number): number {
+    const settings = settingsStore.getSettings();
+    const startNum = typeof customStart === 'number' && !isNaN(customStart) && customStart > 0
+      ? Math.floor(customStart)
+      : (settings.kot?.tokenStartNumber || 101);
+
+    this.tokenCounter = startNum;
+    persistentDb.saveTokenCounter(this.tokenCounter);
+    settingsStore.updateSection('kot', { tokenStartNumber: startNum });
+    return this.tokenCounter;
+  }
+
+  public setTokenCounter(counter: number): void {
+    if (counter > 0) {
+      this.tokenCounter = Math.floor(counter);
+      persistentDb.saveTokenCounter(this.tokenCounter);
+    }
+  }
+
+  public getNextTokenNumber(): number {
+    return this.tokenCounter;
   }
 
   public async initStore() {
@@ -447,6 +478,7 @@ class LivePuffStore {
     }
 
     const tokenNo = this.tokenCounter++;
+    persistentDb.saveTokenCounter(this.tokenCounter);
     const invoiceNo = settingsStore.getAndIncrementInvoiceNumber();
 
     const cleanName = params.customerName?.trim() || undefined;
