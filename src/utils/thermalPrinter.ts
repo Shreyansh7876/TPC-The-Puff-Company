@@ -64,7 +64,7 @@ export const formatItemRow = (name: string, qty: number, price: number, total: n
 
 /**
  * Generates standard plain-text KOT formatted specifically for thermal printers
- * (WITHOUT ANY PRICES, TAXES, OR PAYMENT METHODS)
+ * (WITHOUT ANY PRICES, TAXES, DATE/TIME, LOGOS, OR PAYMENT METHODS)
  */
 export const generateKOTPlainText = (order: Order, settings: AppMasterSettings): string => {
   const width = getLineWidth(settings.printing?.paperWidth || '58mm');
@@ -72,38 +72,29 @@ export const generateKOTPlainText = (order: Order, settings: AppMasterSettings):
   const doubleDivider = '='.repeat(width);
   const lines: string[] = [];
 
-  // Simple Header
+  // 1. Simple KOT Header
   lines.push(doubleDivider);
-  lines.push(centerText('K.O.T', width));
+  lines.push(centerText('THE PUFF CO.', width));
   lines.push(doubleDivider);
 
-  // Token & Order Type / Table
+  // 2. Token & Order Type / Table
   lines.push(centerText(`TOKEN #${order.tokenNo}`, width));
-  const orderRef = `${order.orderType}${order.tableOrName ? ' • ' + order.tableOrName : ''}`;
-  lines.push(centerText(orderRef.toUpperCase(), width));
-  lines.push(divider);
+  const orderRef = `[${(order.orderType || 'DINE IN').toUpperCase()}${order.tableOrName ? ' - ' + order.tableOrName.toUpperCase() : ''}]`;
+  lines.push(centerText(orderRef, width));
 
-  // Date & Time
-  const dateStr = new Date(order.createdAt).toLocaleDateString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-  });
-  const timeStr = new Date(order.createdAt).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-  if (order.invoiceNo) {
-    lines.push(justifyRow(`${dateStr} ${timeStr}`, `INV: ${order.invoiceNo}`, width));
-  } else {
-    lines.push(justifyRow('Date & Time:', `${dateStr} ${timeStr}`, width));
+  // 3. Customer Name (if available)
+  if (order.customerName) {
+    lines.push(divider);
+    lines.push(`CUST: ${order.customerName.toUpperCase()}`);
   }
+
   lines.push(divider);
 
-  // Items Header
+  // 4. Items Header
   lines.push('QTY  ITEM');
   lines.push(divider);
 
-  // Items List (STRICTLY NO PRICES / TOTALS)
+  // 5. Items List (STRICTLY NO PRICES / TOTALS / DATES)
   order.items.forEach((item) => {
     lines.push(`[${item.quantity}x] ${item.itemName}`);
     if (item.notes && settings.printing?.printItemNotesOnKOT !== false) {
@@ -111,19 +102,17 @@ export const generateKOTPlainText = (order: Order, settings: AppMasterSettings):
     }
   });
 
-  lines.push(divider);
-
-  // Special Kitchen Notes
+  // 6. Special Kitchen Notes
   if (order.customerNotes && settings.printing?.printCustomerNotes !== false) {
-    lines.push(`NOTE: ${order.customerNotes}`);
     lines.push(divider);
+    lines.push(`* NOTE: ${order.customerNotes}`);
   }
 
-  // Feed lines for tear-off
-  const feedCount = settings.printing?.feedLines ?? 2;
-  for (let i = 0; i < feedCount; i++) {
-    lines.push('');
-  }
+  lines.push(doubleDivider);
+
+  // Minimal feed lines for tear-off
+  lines.push('');
+  lines.push('');
 
   return lines.join('\n');
 };

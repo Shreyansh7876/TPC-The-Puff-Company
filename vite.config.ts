@@ -5,7 +5,7 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
-    base: '/TPC-The-Puff-Company/',
+    base: '/',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

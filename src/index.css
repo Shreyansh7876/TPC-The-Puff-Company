@@ -79,48 +79,93 @@ input, textarea, [contenteditable="true"] {
 .border-espresso { border-color: #2e211d; }
 
 /* ----------------------------------------------------
-   THERMAL PRINTER (58mm & 80mm ESC/POS) PRINT STYLES
+   DEDICATED 58mm / 80mm THERMAL PRINTER STYLES
    ---------------------------------------------------- */
 @page {
-  margin: 0;
+  margin: 0 !important;
   size: auto;
 }
 
 @media print {
+  /* 1. Global Reset & Canvas Neutralization */
   html, body {
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    overflow: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* 2. STRICTLY HIDE ALL MAIN PWA UI ELEMENTS */
+  #root,
+  header,
+  nav,
+  main,
+  aside,
+  footer,
+  dialog,
+  [role="dialog"],
+  .backdrop-blur-sm,
+  .print\\:hidden {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+  }
+
+  /* 3. SHOW ONLY THE DEDICATED THERMAL PRINT PORTAL */
+  #thermal-print-portal {
+    display: block !important;
+    visibility: visible !important;
+    position: static !important;
+    margin: 0 auto !important;
+    padding: 1mm 1.5mm !important;
+    width: 100% !important;
+    max-width: 48mm !important; /* Standard printable width for 58mm thermal rolls */
+    background: #ffffff !important;
+    color: #000000 !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    page-break-after: avoid !important;
+  }
+
+  body[data-paper-width="80mm"] #thermal-print-portal {
+    max-width: 72mm !important; /* Printable width for 80mm thermal rolls */
+  }
+
+  /* 4. TICKET LAYOUT & MONOCHROME THERMAL HARDENING */
+  .thermal-ticket,
+  .thermal-print-wrapper {
+    display: block !important;
+    width: 100% !important;
     margin: 0 !important;
     padding: 0 !important;
     background: #ffffff !important;
     color: #000000 !important;
     font-family: 'Courier New', Courier, monospace !important;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    page-break-after: avoid !important;
   }
 
-  /* Target printable thermal elements */
-  #thermal-receipt,
-  #thermal-invoice-ticket,
-  #thermal-kot-ticket {
-    display: block !important;
-    margin: 0 !important;
-    padding: 2mm !important;
-    box-shadow: none !important;
-    border: none !important;
+  .thermal-ticket *,
+  #thermal-print-portal * {
     color: #000000 !important;
-    background: #ffffff !important;
-    page-break-inside: avoid;
-    page-break-after: auto;
-  }
-
-  /* Force pure black borders and text */
-  #thermal-invoice-ticket *,
-  #thermal-kot-ticket *,
-  #thermal-receipt * {
-    color: #000000 !important;
+    background: transparent !important;
     box-shadow: none !important;
     text-shadow: none !important;
     border-color: #000000 !important;
     -webkit-text-fill-color: #000000 !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
   }
 }
+
 

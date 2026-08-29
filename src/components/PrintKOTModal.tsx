@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Order, ThermalPaperWidth } from '../types';
 import { Printer, X, Copy, Check, ChefHat, Eye } from 'lucide-react';
 import { settingsStore } from '../services/settingsStore';
+import { thermalPrintService } from '../services/thermalPrintService';
 import { ThermalKOTTicket } from './ThermalKOTTicket';
 import { generateKOTPlainText } from '../utils/thermalPrinter';
 
@@ -21,12 +22,7 @@ export const PrintKOTModal: React.FC<PrintKOTModalProps> = ({ order, isOpen = tr
   const [copied, setCopied] = useState(false);
 
   const handlePrint = () => {
-    // Add print attribute for targeted CSS print styling
-    document.body.setAttribute('data-print-mode', 'kot');
-    window.print();
-    setTimeout(() => {
-      document.body.removeAttribute('data-print-mode');
-    }, 1000);
+    thermalPrintService.printKOT(order, { paperWidth: selectedWidth });
   };
 
   const handleCopyESC = () => {

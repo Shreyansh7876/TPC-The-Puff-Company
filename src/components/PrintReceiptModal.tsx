@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Order, ThermalPaperWidth } from '../types';
 import { Printer, X, Copy, Check, Receipt, ChefHat, FileText, Sparkles } from 'lucide-react';
 import { settingsStore } from '../services/settingsStore';
+import { thermalPrintService } from '../services/thermalPrintService';
 import { ThermalInvoiceTicket } from './ThermalInvoiceTicket';
 import { ThermalKOTTicket } from './ThermalKOTTicket';
 import { generateInvoicePlainText, generateKOTPlainText } from '../utils/thermalPrinter';
@@ -27,11 +28,11 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
   const [copied, setCopied] = useState(false);
 
   const handlePrint = (mode: 'invoice' | 'kot' = activeTab) => {
-    document.body.setAttribute('data-print-mode', mode);
-    window.print();
-    setTimeout(() => {
-      document.body.removeAttribute('data-print-mode');
-    }, 1000);
+    if (mode === 'invoice') {
+      thermalPrintService.printInvoice(order, { paperWidth: selectedWidth });
+    } else {
+      thermalPrintService.printKOT(order, { paperWidth: selectedWidth });
+    }
   };
 
   const handleCopyESC = () => {

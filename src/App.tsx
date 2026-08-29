@@ -18,8 +18,16 @@ import { ExportDataModal } from './components/ExportDataModal';
 import { CustomerManagement } from './components/CustomerManagement';
 import { StorageAlertBanner } from './components/StorageAlertBanner';
 import { useKioskProtection } from './hooks/useKioskProtection';
+import { securityService } from './services/securityService';
+import { LoginScreen } from './components/LoginScreen';
+import { ThermalPrintPortal } from './components/ThermalPrintPortal';
 
 export default function App() {
+  // Authentication State
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(
+    securityService.isAuthenticated()
+  );
+
   // Default view is the single unified POS module ('laptop_pos' / Billing) which auto-adapts
   const [currentView, setCurrentView] = useState<AppViewMode>('laptop_pos');
   const [isSheetsModalOpen, setIsSheetsModalOpen] = useState<boolean>(false);
@@ -105,6 +113,13 @@ export default function App() {
     };
   }, []);
 
+  // Subscribe to security auth status & auto-lock
+  useEffect(() => {
+    return securityService.subscribeAuth((authenticated) => {
+      setIsAuthenticated(authenticated);
+    });
+  }, []);
+
   // Subscribe to store real-time data
   useEffect(() => {
     const unsubMenu = livePuffStore.subscribeMenu(setMenuItems);
@@ -140,6 +155,11 @@ export default function App() {
       pendingOrder: order,
     });
   };
+
+  // If POS Terminal is locked, render the Master Login / Unlock Screen
+  if (!isAuthenticated) {
+    return <LoginScreen onLoginSuccess={() => setIsAuthenticated(true)} />;
+  }
 
   return (
     <div className="min-h-screen bg-[#f4efe8] text-[#2e211d] font-sans flex flex-col selection:bg-[#8c3a27] selection:text-[#f4efe8]">
@@ -224,6 +244,8 @@ export default function App() {
           onDismiss={() => setShowPwaBanner(false)}
         />
       )}
+      {/* Dedicated Thermal Printing Portal */}
+      <ThermalPrintPortal />
     </div>
   );
 };

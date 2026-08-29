@@ -10,10 +10,12 @@ import {
   Users,
   Upload,
   Trash2,
-  Store
+  Store,
+  Lock
 } from 'lucide-react';
 import { SyncStatus } from '../types';
 import { settingsStore } from '../services/settingsStore';
+import { securityService } from '../services/securityService';
 
 export type AppViewMode = 'mobile_pos' | 'laptop_pos' | 'kot_display' | 'inventory' | 'sales' | 'customers' | 'setup';
 
@@ -282,6 +284,16 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="hidden sm:inline">Install App</span>
             </button>
           )}
+
+          {/* Quick Lock Button */}
+          <button
+            onClick={() => securityService.logout()}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-[#231916] hover:bg-[#1a1210] text-[#e2d7c9] hover:text-[#f4efe8] rounded-xl text-xs font-semibold border border-[#a19284]/40 transition-all cursor-pointer"
+            title="Lock POS Terminal"
+          >
+            <Lock className="w-3.5 h-3.5 text-[#e2d7c9]" />
+            <span className="hidden xl:inline">Lock</span>
+          </button>
         </div>
       </div>
 

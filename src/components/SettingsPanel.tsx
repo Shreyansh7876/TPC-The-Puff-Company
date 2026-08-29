@@ -37,6 +37,7 @@ import {
   Tag,
   ChevronRight,
   Eye,
+  EyeOff,
   Image as ImageIcon,
   Printer,
   Copy,
@@ -47,6 +48,8 @@ import {
 } from 'lucide-react';
 import { settingsStore } from '../services/settingsStore';
 import { livePuffStore } from '../services/store';
+import { securityService } from '../services/securityService';
+import { RecoveryKeyModal } from './RecoveryKeyModal';
 import { 
   AppMasterSettings, 
   ActivityLogEntry, 
@@ -73,8 +76,22 @@ export const SettingsPanel: React.FC = () => {
 
   // Active Settings Tab
   const [activeTab, setActiveTab] = useState<
-    'store' | 'billing' | 'printing' | 'inventory' | 'menu' | 'kot' | 'pos' | 'payments' | 'backup' | 'analytics'
+    'store' | 'security' | 'billing' | 'printing' | 'inventory' | 'menu' | 'kot' | 'pos' | 'payments' | 'backup' | 'analytics'
   >('store');
+
+  // Security & Password Management State
+  const [currentPasswordInput, setCurrentPasswordInput] = useState<string>('');
+  const [newPasswordInput, setNewPasswordInput] = useState<string>('');
+  const [confirmPasswordInput, setConfirmPasswordInput] = useState<string>('');
+  const [showCurrentPass, setShowCurrentPass] = useState<boolean>(false);
+  const [showNewPass, setShowNewPass] = useState<boolean>(false);
+  const [securityError, setSecurityError] = useState<string>('');
+  const [securitySuccess, setSecuritySuccess] = useState<string>('');
+  const [isChangingPassword, setIsChangingPassword] = useState<boolean>(false);
+  const [activeRecoveryKey, setActiveRecoveryKey] = useState<string>(securityService.getRecoveryKey());
+  const [isRecoveryModalOpen, setIsRecoveryModalOpen] = useState<boolean>(false);
+  const [isRecoveryKeyRevealed, setIsRecoveryKeyRevealed] = useState<boolean>(false);
+  const [autoLockMinutes, setAutoLockMinutes] = useState<number>(securityService.getSecurityConfig().autoLockMinutes);
 
   // Thermal Simulator State
   const [simulatorTab, setSimulatorTab] = useState<'invoice' | 'kot'>('invoice');
@@ -354,6 +371,59 @@ export const SettingsPanel: React.FC = () => {
   const handleUpdatePayments = (field: string, val: any) => {
     settingsStore.updateSection('payments', { [field]: val });
     triggerSaveNotification('Payment method settings updated!');
+  };
+
+  // Security Handlers
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSecurityError('');
+    setSecuritySuccess('');
+
+    const cleanCurrent = currentPasswordInput.trim();
+    const cleanNew = newPasswordInput.trim();
+
+    if (!cleanCurrent) {
+      setSecurityError('Please enter your current password.');
+      return;
+    }
+    if (!cleanNew) {
+      setSecurityError('Please enter a new password.');
+      return;
+    }
+    if (cleanNew.length < 3) {
+      setSecurityError('Password must be at least 3 characters.');
+      return;
+    }
+    if (cleanNew !== confirmPasswordInput.trim()) {
+      setSecurityError('New passwords do not match.');
+      return;
+    }
+
+    setIsChangingPassword(true);
+    try {
+      const res = await securityService.changePassword(cleanCurrent, cleanNew);
+      if (res.success && res.newRecoveryKey) {
+        setActiveRecoveryKey(res.newRecoveryKey);
+        setIsRecoveryModalOpen(true);
+        setCurrentPasswordInput('');
+        setNewPasswordInput('');
+        setConfirmPasswordInput('');
+        setSecuritySuccess('Password updated successfully! Please save your new recovery key.');
+        triggerSaveNotification('Master Password updated successfully!');
+      } else {
+        setSecurityError(res.message || 'Failed to update password.');
+      }
+    } catch (err: any) {
+      setSecurityError('Failed to change password. Please check your credentials.');
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
+  const handleUpdateAutoLock = (mins: number) => {
+    setAutoLockMinutes(mins);
+    securityService.updateSecurityConfig({ autoLockMinutes: mins });
+    triggerSaveNotification(mins === 0 ? 'Inactivity Auto-Lock disabled.' : `Auto-lock set to ${mins} minutes.`);
   };
 
   const handleTogglePaymentMethod = (method: 'CASH' | 'UPI' | 'CARD' | 'SPLIT') => {
@@ -646,6 +716,7 @@ export const SettingsPanel: React.FC = () => {
       <div className="flex items-center gap-1.5 overflow-x-auto pb-2 scrollbar-none border-b border-[#a19284]/20">
         {[
           { id: 'store', label: 'Store Profile', icon: Store },
+          { id: 'security', label: 'Security & Access', icon: Lock },
           { id: 'billing', label: 'Billing & Invoice', icon: Receipt },
           { id: 'printing', label: 'Thermal Printing', icon: Printer },
           { id: 'inventory', label: 'Inventory & Audit', icon: Package },
@@ -902,6 +973,242 @@ export const SettingsPanel: React.FC = () => {
                   className="w-full px-3.5 py-2 bg-[#f4efe8]/50 border border-[#a19284]/40 rounded-xl text-xs font-bold text-[#2e211d] focus:outline-none focus:border-[#8c3a27]"
                 />
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB: SECURITY & ACCESS */}
+      {activeTab === 'security' && (
+        <div className="space-y-6 animate-in fade-in duration-200">
+          {/* SECTION 1: MASTER PASSWORD CHANGE */}
+          <div className="bg-white p-5 sm:p-6 rounded-3xl border border-[#a19284]/30 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#a19284]/20 pb-3">
+              <div className="flex items-center gap-2">
+                <Lock className="w-5 h-5 text-[#8c3a27]" />
+                <h3 className="font-['Playfair_Display'] font-black text-base text-[#2e211d]">
+                  POS Master Password & Access Lock
+                </h3>
+              </div>
+              <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 self-start sm:self-auto flex items-center gap-1">
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>SHA-256 Encrypted</span>
+              </span>
+            </div>
+
+            <p className="text-xs text-[#a19284] leading-relaxed">
+              Set or update your master password to prevent unauthorized staff or visitors from opening billing, reports, settings, or inventory. Your password is securely encrypted with cryptographic salting and permanently saved across all future sessions.
+            </p>
+
+            {securityError && (
+              <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-800 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <span>{securityError}</span>
+              </div>
+            )}
+
+            {securitySuccess && (
+              <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-xs text-emerald-800 flex items-start gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                <span>{securitySuccess}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleChangePassword} className="space-y-4 pt-1">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="text-xs font-bold text-[#2e211d] block mb-1">
+                    Current Password *
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showCurrentPass ? 'text' : 'password'}
+                      value={currentPasswordInput}
+                      onChange={(e) => setCurrentPasswordInput(e.target.value)}
+                      placeholder="Enter current password"
+                      className="w-full pl-3.5 pr-9 py-2.5 bg-[#f4efe8]/50 border border-[#a19284]/40 rounded-xl text-xs font-bold text-[#2e211d] focus:outline-none focus:border-[#8c3a27]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowCurrentPass(!showCurrentPass)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#a19284] hover:text-[#2e211d]"
+                      tabIndex={-1}
+                    >
+                      {showCurrentPass ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-[#2e211d] block mb-1">
+                    New Password *
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showNewPass ? 'text' : 'password'}
+                      value={newPasswordInput}
+                      onChange={(e) => setNewPasswordInput(e.target.value)}
+                      placeholder="Min. 3 characters"
+                      className="w-full pl-3.5 pr-9 py-2.5 bg-[#f4efe8]/50 border border-[#a19284]/40 rounded-xl text-xs font-bold text-[#2e211d] focus:outline-none focus:border-[#8c3a27]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPass(!showNewPass)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#a19284] hover:text-[#2e211d]"
+                      tabIndex={-1}
+                    >
+                      {showNewPass ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-[#2e211d] block mb-1">
+                    Confirm New Password *
+                  </label>
+                  <input
+                    type={showNewPass ? 'text' : 'password'}
+                    value={confirmPasswordInput}
+                    onChange={(e) => setConfirmPasswordInput(e.target.value)}
+                    placeholder="Repeat new password"
+                    className="w-full px-3.5 py-2.5 bg-[#f4efe8]/50 border border-[#a19284]/40 rounded-xl text-xs font-bold text-[#2e211d] focus:outline-none focus:border-[#8c3a27]"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                <span className="text-[11px] text-[#a19284]">
+                  Last password update: <strong>{securityService.getLastPasswordChangeDate()}</strong>
+                </span>
+
+                <button
+                  type="submit"
+                  disabled={isChangingPassword}
+                  className="px-5 py-2.5 bg-[#8c3a27] hover:bg-[#722f1f] active:scale-[0.99] text-[#f4efe8] rounded-xl font-bold text-xs flex items-center gap-2 shadow-md transition-all cursor-pointer disabled:opacity-50"
+                >
+                  <Key className="w-3.5 h-3.5" />
+                  <span>{isChangingPassword ? 'Updating Password...' : 'Save New Password'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* SECTION 2: EMERGENCY RECOVERY KEY SYSTEM */}
+          <div className="bg-white p-5 sm:p-6 rounded-3xl border border-[#a19284]/30 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#a19284]/20 pb-3">
+              <div className="flex items-center gap-2">
+                <Key className="w-5 h-5 text-[#8c3a27]" />
+                <h3 className="font-['Playfair_Display'] font-black text-base text-[#2e211d]">
+                  Emergency Recovery Key
+                </h3>
+              </div>
+              <span className="text-[11px] font-bold text-amber-900 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 self-start sm:self-auto">
+                Owner Emergency Key
+              </span>
+            </div>
+
+            <p className="text-xs text-[#a19284] leading-relaxed">
+              If you ever forget the master POS password, you can immediately reset it using this secret Recovery Key directly from the login screen. Every time your password is changed, a new Recovery Key is generated and the old one is permanently deactivated.
+            </p>
+
+            <div className="p-4 bg-[#f4efe8]/70 rounded-2xl border border-[#a19284]/30 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <span className="text-[10px] uppercase font-bold text-[#a19284] tracking-wider block">
+                    Active Recovery Key
+                  </span>
+                  <div className="mt-1 flex items-center gap-2">
+                    <code className="font-mono font-black text-sm sm:text-base text-[#8c3a27] bg-white px-3 py-1.5 rounded-xl border border-[#a19284]/30 select-all">
+                      {isRecoveryKeyRevealed ? activeRecoveryKey : 'TPC-••••-••••-••••'}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={() => setIsRecoveryKeyRevealed(!isRecoveryKeyRevealed)}
+                      className="p-2 rounded-xl bg-white border border-[#a19284]/30 text-[#a19284] hover:text-[#2e211d] transition-colors cursor-pointer"
+                      title={isRecoveryKeyRevealed ? "Hide Recovery Key" : "Reveal Recovery Key"}
+                    >
+                      {isRecoveryKeyRevealed ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(activeRecoveryKey);
+                      triggerSaveNotification('Recovery key copied to clipboard!');
+                    }}
+                    className="px-3.5 py-2 bg-[#2e211d] text-[#f4efe8] rounded-xl text-xs font-bold flex items-center gap-1.5 hover:bg-[#1b1311] transition-all cursor-pointer"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Copy Key</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsRecoveryModalOpen(true)}
+                    className="px-3.5 py-2 bg-[#e2d7c9] text-[#2e211d] rounded-xl text-xs font-bold flex items-center gap-1.5 hover:bg-[#d6c9b8] border border-[#a19284]/40 transition-all cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5 text-[#8c3a27]" />
+                    <span>View & Download</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* SECTION 3: AUTO-LOCK & PROTECTION POLICIES */}
+          <div className="bg-white p-5 sm:p-6 rounded-3xl border border-[#a19284]/30 shadow-sm space-y-4">
+            <h3 className="font-['Playfair_Display'] font-black text-base text-[#2e211d] border-b border-[#a19284]/20 pb-2">
+              Terminal Protection & Auto-Lock Preferences
+            </h3>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
+              <div>
+                <label className="text-xs font-bold text-[#2e211d] block mb-1">
+                  Inactivity Auto-Lock Timer
+                </label>
+                <p className="text-[10px] text-[#a19284] mb-2">
+                  Automatically lock the POS terminal if no touch or clicks occur for a period of time
+                </p>
+                <select
+                  value={autoLockMinutes}
+                  onChange={(e) => handleUpdateAutoLock(parseInt(e.target.value, 10))}
+                  className="w-full px-3.5 py-2.5 bg-[#f4efe8]/50 border border-[#a19284]/40 rounded-xl text-xs font-bold text-[#2e211d] focus:outline-none focus:border-[#8c3a27]"
+                >
+                  <option value={0}>Disabled (Only lock on manual action or app launch)</option>
+                  <option value={5}>5 Minutes of Inactivity</option>
+                  <option value={15}>15 Minutes of Inactivity</option>
+                  <option value={30}>30 Minutes of Inactivity</option>
+                  <option value={60}>60 Minutes of Inactivity</option>
+                </select>
+              </div>
+
+              <div className="flex flex-col justify-end space-y-2">
+                <label className="text-xs font-bold text-[#2e211d] block">
+                  Quick Lock Terminal
+                </label>
+                <button
+                  type="button"
+                  onClick={() => securityService.logout()}
+                  className="w-full py-2.5 px-4 bg-[#2e211d] hover:bg-[#1b1311] text-[#f4efe8] rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+                >
+                  <Lock className="w-3.5 h-3.5 text-[#e2d7c9]" />
+                  <span>Lock Terminal Now</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Business Data Safety Guarantee Note */}
+            <div className="p-3.5 bg-emerald-50/80 rounded-2xl border border-emerald-200 text-xs text-emerald-900 space-y-1">
+              <div className="flex items-center gap-1.5 font-bold text-emerald-800">
+                <ShieldCheck className="w-4 h-4 text-emerald-700" />
+                <span>Data Isolation Guarantee:</span>
+              </div>
+              <p className="text-[11px] text-emerald-800/90 leading-relaxed">
+                Password changes, session locks, and recovery resets are strictly access safeguards. They do NOT modify or erase any orders, customer profiles, inventory stocks, recipes, reports, or cloud synchronization records.
+              </p>
             </div>
           </div>
         </div>
@@ -2543,6 +2850,16 @@ export const SettingsPanel: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Recovery Key Viewer & Export Modal */}
+      <RecoveryKeyModal
+        isOpen={isRecoveryModalOpen}
+        recoveryKey={activeRecoveryKey}
+        onClose={() => setIsRecoveryModalOpen(false)}
+        title="POS Emergency Recovery Key"
+        subtitle="This master key allows you to reset the POS password directly from the login screen in an emergency. Store it in a secure place."
+        requireConfirmation={false}
+      />
     </div>
   );
 };
