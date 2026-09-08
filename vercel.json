@@ -3,7 +3,19 @@
   "rewrites": [
     {
       "source": "/TPC-The-Puff-Company/api/(.*)",
-      "destination": "/api/$1"
+      "destination": "/api"
+    },
+    {
+      "source": "/TPC-The-Puff-Company/api",
+      "destination": "/api"
+    },
+    {
+      "source": "/api/(.*)",
+      "destination": "/api"
+    },
+    {
+      "source": "/api",
+      "destination": "/api"
     },
     {
       "source": "/TPC-The-Puff-Company/assets/(.*)",

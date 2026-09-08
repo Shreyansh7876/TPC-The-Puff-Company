@@ -75,15 +75,31 @@ export const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
 
-// In Vercel serverless functions, requests to /api/health may arrive as /health depending on routing
-if (process.env.VERCEL || process.env.NOW_REGION) {
-  app.use((req, res, next) => {
-    if (req.url && !req.url.startsWith('/api')) {
-      req.url = '/api' + (req.url.startsWith('/') ? req.url : '/' + req.url);
-    }
-    next();
-  });
-}
+// Normalize URL across all Vercel serverless rewrites and subpath prefixes
+app.use((req, res, next) => {
+  const incoming = req.originalUrl || req.url;
+
+  // In local development / container preview, non-API requests must pass straight to Vite / static files
+  const isApi = incoming.startsWith('/api') || 
+                incoming.startsWith('/TPC-The-Puff-Company/api') ||
+                Boolean(process.env.VERCEL || process.env.NOW_REGION);
+
+  if (!isApi) {
+    return next();
+  }
+
+  let clean = incoming.replace(/^\/TPC-The-Puff-Company/, '');
+  if ((clean === '/' || clean === '/api' || clean === '') && req.originalUrl && req.originalUrl !== '/' && req.originalUrl !== '/api') {
+    clean = req.originalUrl.replace(/^\/TPC-The-Puff-Company/, '');
+  }
+
+  if (!clean.startsWith('/api')) {
+    clean = '/api' + (clean.startsWith('/') ? clean : '/' + clean);
+  }
+
+  req.url = clean;
+  next();
+});
 
 // API Health & Status Check
 app.get(['/api/health', '/api/status', '/health', '/status'], (req, res) => {
