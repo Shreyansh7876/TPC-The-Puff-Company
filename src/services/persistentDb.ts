@@ -1,5 +1,5 @@
 import { Order, Ingredient, PuffItem, AppMasterSettings } from '../types';
-import { INITIAL_MENU_ITEMS, INITIAL_INGREDIENTS } from '../data/initialData';
+import { INITIAL_MENU_ITEMS, INITIAL_INGREDIENTS } from '../config/defaultSeed';
 
 const DB_NAME = 'ThePuffCoPOS_DB_v2';
 const DB_VERSION = 1;

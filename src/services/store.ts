@@ -1,5 +1,5 @@
 import { PuffItem, Ingredient, Order, OrderStatus, PaymentMode, OrderType, CartItem, DailySalesSummary, SyncStatus } from '../types';
-import { INITIAL_MENU_ITEMS, INITIAL_INGREDIENTS } from '../data/initialData';
+import { INITIAL_MENU_ITEMS, INITIAL_INGREDIENTS } from '../config/defaultSeed';
 import { settingsStore } from './settingsStore';
 import { customerStore } from './customerStore';
 import { persistentDb } from './persistentDb';

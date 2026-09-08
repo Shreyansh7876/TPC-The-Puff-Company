@@ -111,7 +111,7 @@ input, textarea, [contenteditable="true"] {
   dialog,
   [role="dialog"],
   .backdrop-blur-sm,
-  .print\\:hidden {
+  .print\:hidden {
     display: none !important;
     visibility: hidden !important;
     height: 0 !important;
