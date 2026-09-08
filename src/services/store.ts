@@ -364,13 +364,20 @@ class LivePuffStore {
       } catch (parseErr) {
         return {
           success: false,
-          error: 'Server returned an HTML response instead of JSON. Please authorize Google Account (OAuth) first, or check the server logs.'
+          error: `Server returned unexpected response (status ${response.status}): ${responseText.slice(0, 200)}`
+        };
+      }
+
+      if (!response.ok || !res.success) {
+        return {
+          success: false,
+          error: res.error || `Server error (${response.status})`
         };
       }
 
       if (res.spreadsheetId) {
         this.spreadsheetId = res.spreadsheetId;
-        this.googleSheetsConnected = res.success && res.authenticated;
+        this.googleSheetsConnected = Boolean(res.success && res.authenticated);
         await this.fetchAllFromGoogleSheets();
       }
       return res;

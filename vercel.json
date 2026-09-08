@@ -2,12 +2,8 @@
   "version": 2,
   "rewrites": [
     {
-      "source": "/api/(.*)",
-      "destination": "/api"
-    },
-    {
-      "source": "/assets/(.*)",
-      "destination": "/assets/$1"
+      "source": "/TPC-The-Puff-Company/api/(.*)",
+      "destination": "/api/$1"
     },
     {
       "source": "/TPC-The-Puff-Company/assets/(.*)",
@@ -16,10 +12,6 @@
     {
       "source": "/TPC-The-Puff-Company/(manifest\\.json|sw\\.js|puff-icon\\.svg|favicon\\.ico)",
       "destination": "/$1"
-    },
-    {
-      "source": "/TPC-The-Puff-Company/api/(.*)",
-      "destination": "/api"
     },
     {
       "source": "/TPC-The-Puff-Company/(.*)",

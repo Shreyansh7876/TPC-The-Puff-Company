@@ -77,18 +77,41 @@ export const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
 
+// API Health & Status Check
+app.get(['/api/health', '/api/status'], (req, res) => {
+  const saEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.SERVICE_ACCOUNT_EMAIL;
+  const rawKey = process.env.GOOGLE_PRIVATE_KEY || process.env.SERVICE_ACCOUNT_KEY;
+  res.json({
+    status: 'ok',
+    serviceAccountConfigured: Boolean(saEmail && rawKey),
+    serviceAccountEmail: saEmail || null,
+    spreadsheetId: process.env.SPREADSHEET_ID || memoryStore.spreadsheetId || null,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Helper to sanitize Google Service Account private keys across all deployment formats
+function cleanPrivateKey(key: string): string {
+  let cleaned = key.trim();
+  if ((cleaned.startsWith('"') && cleaned.endsWith('"')) || (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
+    cleaned = cleaned.slice(1, -1).trim();
+  }
+  return cleaned.replace(/\\n/g, '\n').replace(/\r\n/g, '\n');
+}
+
 // --- GOOGLE AUTHENTICATION HELPERS ---
 function getGoogleAuthClient(req?: express.Request): any {
-  // 1. Google Service Account (Recommended for 24/7 Vercel Cloud Sync)
+  // 1. Google Service Account (Recommended for 24/7 Cloud Sync, no user OAuth needed)
   const saEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.SERVICE_ACCOUNT_EMAIL;
-  let saKey = process.env.GOOGLE_PRIVATE_KEY || process.env.SERVICE_ACCOUNT_KEY;
-  if (saEmail && saKey) {
-    saKey = saKey.replace(/\\n/g, '\n');
+  const rawKey = process.env.GOOGLE_PRIVATE_KEY || process.env.SERVICE_ACCOUNT_KEY;
+  if (saEmail && rawKey) {
+    const saKey = cleanPrivateKey(rawKey);
     return new google.auth.JWT({
       email: saEmail,
       key: saKey,
       scopes: [
         'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/drive',
         'https://www.googleapis.com/auth/drive.file'
       ]
     });
@@ -104,7 +127,7 @@ function getGoogleAuthClient(req?: express.Request): any {
     return oAuth2Client;
   }
 
-  // 3. User OAuth via Cookie or Authorization Header
+  // 3. User OAuth via Cookie or Authorization Header (Fallback)
   if (req) {
     const tokensCookie = req.cookies?.google_tokens;
     let tokens = null;
@@ -141,6 +164,7 @@ function resolveSpreadsheetId(req?: express.Request): string {
 
 // Ensure all 7 tabs exist in Google Spreadsheet
 async function ensureSpreadsheetStructure(sheets: any, spreadsheetId: string) {
+  const saEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.SERVICE_ACCOUNT_EMAIL || 'your service account email';
   try {
     const meta = await sheets.spreadsheets.get({ spreadsheetId });
     const existingSheets = new Set((meta.data.sheets || []).map((s: any) => s.properties?.title));
@@ -199,6 +223,12 @@ async function ensureSpreadsheetStructure(sheets: any, spreadsheetId: string) {
 
     return true;
   } catch (err: any) {
+    if (err?.code === 403 || err?.status === 403) {
+      throw new Error(`Permission denied (403): Google Sheet is not shared with the Service Account. Please open your Google Sheet in a browser, click 'Share', and invite '${saEmail}' as an 'Editor'.`);
+    }
+    if (err?.code === 404 || err?.status === 404) {
+      throw new Error(`Spreadsheet not found (404): Please check your SPREADSHEET_ID and ensure the spreadsheet is shared with '${saEmail}'.`);
+    }
     console.error('Error ensuring spreadsheet structure:', err?.message || err);
     throw err;
   }
@@ -312,11 +342,11 @@ app.post('/api/sheets/init', async (req, res) => {
   const auth = getGoogleAuthClient(req);
 
   if (!auth) {
-    return res.json({
+    return res.status(400).json({
       success: false,
       authenticated: false,
       spreadsheetId: spreadsheetId || null,
-      error: 'Google Cloud credentials not connected. Set GOOGLE_SERVICE_ACCOUNT_EMAIL or authorize OAuth.'
+      error: 'Google Service Account credentials not configured. Please ensure GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_PRIVATE_KEY environment variables are set.'
     });
   }
 
@@ -325,72 +355,91 @@ app.post('/api/sheets/init', async (req, res) => {
 
     if (!spreadsheetId) {
       // Create new master spreadsheet on Google Drive
-      const createRes = await sheets.spreadsheets.create({
-        requestBody: {
-          properties: {
-            title: 'THE PUFF COMPANY - POS Master Database (Cloud)'
-          },
-          sheets: Object.values(SHEET_NAMES).map((title) => ({ properties: { title } }))
-        }
-      });
+      try {
+        const createRes = await sheets.spreadsheets.create({
+          requestBody: {
+            properties: {
+              title: 'THE PUFF COMPANY - POS Master Database (Cloud)'
+            },
+            sheets: Object.values(SHEET_NAMES).map((title) => ({ properties: { title } }))
+          }
+        });
 
-      spreadsheetId = createRes.data.spreadsheetId!;
-      memoryStore.spreadsheetId = spreadsheetId;
+        spreadsheetId = createRes.data.spreadsheetId!;
+        memoryStore.spreadsheetId = spreadsheetId;
+      } catch (createErr: any) {
+        const saEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || process.env.SERVICE_ACCOUNT_EMAIL || 'your service account email';
+        return res.status(400).json({
+          success: false,
+          error: `Service accounts cannot create files directly in personal Google Drives without domain delegation: ${createErr.message}. ` +
+                 `Please create a blank Google Sheet in your Google Drive, click 'Share', add '${saEmail}' as 'Editor', and set SPREADSHEET_ID in your environment variables or paste its link into the Link Sheet field.`
+        });
+      }
+    }
 
-      await ensureSpreadsheetStructure(sheets, spreadsheetId);
+    memoryStore.spreadsheetId = spreadsheetId;
+    await ensureSpreadsheetStructure(sheets, spreadsheetId);
 
-      // Seed initial menu
-      const menuRows = INITIAL_MENU_ITEMS.map((item) => [
-        item.id,
-        item.name,
-        item.category,
-        item.price,
-        item.isVeg ? 'TRUE' : 'FALSE',
-        item.description,
-        item.isAvailable ? 'TRUE' : 'FALSE',
-        item.image,
-        JSON.stringify(item.recipe || [])
-      ]);
-      await sheets.spreadsheets.values.append({
+    // Check if Menu_Items has data; if empty, seed default menu, categories, and inventory
+    try {
+      const menuCheck = await sheets.spreadsheets.values.get({
         spreadsheetId,
-        range: `${SHEET_NAMES.MENU}!A2`,
-        valueInputOption: 'USER_ENTERED',
-        requestBody: { values: menuRows }
+        range: `${SHEET_NAMES.MENU}!A2:B2`
       });
+      const hasMenuData = menuCheck.data.values && menuCheck.data.values.length > 0;
+      if (!hasMenuData) {
+        // Seed initial menu
+        const menuRows = INITIAL_MENU_ITEMS.map((item) => [
+          item.id,
+          item.name,
+          item.category,
+          item.price,
+          item.isVeg ? 'TRUE' : 'FALSE',
+          item.description,
+          item.isAvailable ? 'TRUE' : 'FALSE',
+          item.image,
+          JSON.stringify(item.recipe || [])
+        ]);
+        await sheets.spreadsheets.values.append({
+          spreadsheetId,
+          range: `${SHEET_NAMES.MENU}!A2`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: menuRows }
+        });
 
-      // Seed initial categories
-      const catRows = INITIAL_CATEGORIES.map((cat) => [
-        cat.id,
-        cat.name,
-        cat.sortOrder,
-        cat.isActive ? 'TRUE' : 'FALSE'
-      ]);
-      await sheets.spreadsheets.values.append({
-        spreadsheetId,
-        range: `${SHEET_NAMES.CATEGORIES}!A2`,
-        valueInputOption: 'USER_ENTERED',
-        requestBody: { values: catRows }
-      });
+        // Seed initial categories
+        const catRows = INITIAL_CATEGORIES.map((cat) => [
+          cat.id,
+          cat.name,
+          cat.sortOrder,
+          cat.isActive ? 'TRUE' : 'FALSE'
+        ]);
+        await sheets.spreadsheets.values.append({
+          spreadsheetId,
+          range: `${SHEET_NAMES.CATEGORIES}!A2`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: catRows }
+        });
 
-      // Seed initial inventory
-      const invRows = INITIAL_INGREDIENTS.map((ing) => [
-        ing.id,
-        ing.name,
-        ing.unit,
-        ing.currentStock,
-        ing.minStockAlert,
-        ing.costPerUnit,
-        ing.category
-      ]);
-      await sheets.spreadsheets.values.append({
-        spreadsheetId,
-        range: `${SHEET_NAMES.INVENTORY}!A2`,
-        valueInputOption: 'USER_ENTERED',
-        requestBody: { values: invRows }
-      });
-    } else {
-      memoryStore.spreadsheetId = spreadsheetId;
-      await ensureSpreadsheetStructure(sheets, spreadsheetId);
+        // Seed initial inventory
+        const invRows = INITIAL_INGREDIENTS.map((ing) => [
+          ing.id,
+          ing.name,
+          ing.unit,
+          ing.currentStock,
+          ing.minStockAlert,
+          ing.costPerUnit,
+          ing.category
+        ]);
+        await sheets.spreadsheets.values.append({
+          spreadsheetId,
+          range: `${SHEET_NAMES.INVENTORY}!A2`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: invRows }
+        });
+      }
+    } catch (seedErr) {
+      console.warn('Notice while checking/seeding menu items in sheet:', seedErr);
     }
 
     const spreadsheetUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
@@ -399,7 +448,7 @@ app.post('/api/sheets/init', async (req, res) => {
       authenticated: true,
       spreadsheetId,
       spreadsheetUrl,
-      message: 'Master Google Sheets database connected successfully.'
+      message: 'Master Google Sheets database connected and synchronized successfully via Service Account.'
     });
   } catch (error: any) {
     console.error('Google Sheets Init Error:', error?.message || error);
@@ -1331,6 +1380,23 @@ app.post('/api/store/settings', (req, res) => {
 app.post('/api/store/customers', (req, res) => {
   if (req.body.customers) memoryStore.customers = { ...memoryStore.customers, ...req.body.customers };
   return res.json({ success: true, customers: memoryStore.customers });
+});
+
+// Catch-all 404 handler for API routes to guarantee JSON response
+app.use('/api', (req, res) => {
+  res.status(404).json({
+    success: false,
+    error: `API route not found: ${req.method} ${req.originalUrl || req.url}`
+  });
+});
+
+// Global API error handler ensuring JSON response
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error('API Error:', err);
+  res.status(500).json({
+    success: false,
+    error: err?.message || 'Internal Server Error'
+  });
 });
 
 // --- SERVER INITIALIZATION (DEV & STANDALONE CONTAINER MODES) ---
