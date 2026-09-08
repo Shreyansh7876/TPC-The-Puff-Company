@@ -36,7 +36,7 @@ class CustomerStore {
   private saveToStorage() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.manualNotes));
-      fetch('/api/store/customers', {
+      fetch('/api/sheets/customers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ customers: this.manualNotes })
@@ -44,6 +44,25 @@ class CustomerStore {
     } catch (e) {
       console.error('Failed to save customer database to storage:', e);
     }
+  }
+
+  public loadFromGoogleSheets(customers: Record<string, any>) {
+    if (!customers || typeof customers !== 'object') return;
+    Object.entries(customers).forEach(([mobile, data]: [string, any]) => {
+      if (!mobile) return;
+      if (!this.manualNotes[mobile]) {
+        this.manualNotes[mobile] = {};
+      }
+      if (data.customerName || data.name) {
+        this.manualNotes[mobile].name = data.customerName || data.name;
+      }
+      if (data.notes) {
+        this.manualNotes[mobile].notes = data.notes;
+      }
+    });
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.manualNotes));
+    } catch (e) {}
   }
 
   public updateCustomerInfo(mobile: string, name?: string, notes?: string) {

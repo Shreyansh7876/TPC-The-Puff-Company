@@ -115,24 +115,15 @@ class LivePuffStore {
       if (authRes.spreadsheetId) {
         this.spreadsheetId = authRes.spreadsheetId;
       }
-
-      // 3. Two-Way Sync with Backend Server Database
-      await this.syncWithServerBackend();
-
-      // 4. Initialize / Sync Google Sheets Database if configured
-      if (this.spreadsheetId) {
-        const initRes = await fetch('/api/sheets/init', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ spreadsheetId: this.spreadsheetId })
-        }).then((r) => r.json()).catch(() => null);
-
-        if (initRes && initRes.success) {
-          this.spreadsheetId = initRes.spreadsheetId;
-          this.googleSheetsConnected = true;
-          await this.fetchAllFromGoogleSheets();
-        }
+      if (authRes.authenticated) {
+        this.googleSheetsConnected = true;
       }
+
+      // 3. Fetch all master data from Google Sheets
+      await this.fetchAllFromGoogleSheets();
+
+      // 4. Two-Way Sync with Backend Server Cache
+      await this.syncWithServerBackend();
 
       // 5. Flush any pending offline mutations
       await this.flushOfflineQueue();
@@ -140,14 +131,14 @@ class LivePuffStore {
       console.warn('Initial store synchronization notice:', err);
     }
 
-    // Start live auto-polling every 4 seconds to sync across terminals and flush queue
+    // Start live auto-polling every 5 seconds to sync across terminals from Google Sheets
     if (!this.pollInterval && typeof window !== 'undefined') {
       this.pollInterval = setInterval(() => {
         if (this.isOnline) {
           this.flushOfflineQueue();
-          this.syncWithServerBackend();
+          this.fetchAllFromGoogleSheets();
         }
-      }, 4000);
+      }, 5000);
     }
   }
 
@@ -289,59 +280,70 @@ class LivePuffStore {
   // --- GOOGLE SHEETS FETCH ---
 
   public async fetchAllFromGoogleSheets() {
-    if (!this.spreadsheetId) return;
-
     try {
-      const spIdParam = `?spreadsheetId=${encodeURIComponent(this.spreadsheetId)}`;
+      const spIdParam = this.spreadsheetId ? `?spreadsheetId=${encodeURIComponent(this.spreadsheetId)}` : '';
+      const allRes = await fetch(`/api/sheets/all${spIdParam}`)
+        .then(async (r) => {
+          const text = await r.text();
+          try { return JSON.parse(text); } catch { return null; }
+        })
+        .catch(() => null);
 
-      const [menuData, inventoryData, ordersData] = await Promise.all([
-        fetch(`/api/sheets/menu${spIdParam}`)
-          .then(async (r) => {
-            const text = await r.text();
-            try { return JSON.parse(text); } catch { return null; }
-          })
-          .catch(() => null),
-        fetch(`/api/sheets/inventory${spIdParam}`)
-          .then(async (r) => {
-            const text = await r.text();
-            try { return JSON.parse(text); } catch { return null; }
-          })
-          .catch(() => null),
-        fetch(`/api/sheets/orders${spIdParam}`)
-          .then(async (r) => {
-            const text = await r.text();
-            try { return JSON.parse(text); } catch { return null; }
-          })
-          .catch(() => null)
-      ]);
+      if (allRes && allRes.success) {
+        // 1. Menu Items
+        if (Array.isArray(allRes.menu) && allRes.menu.length > 0) {
+          this.menuItems = allRes.menu;
+          persistentDb.saveMenu(this.menuItems);
+          this.notifyMenu();
+        }
 
-      if (menuData && Array.isArray(menuData.menu) && menuData.menu.length > 0) {
-        this.menuItems = menuData.menu;
-        persistentDb.saveMenu(this.menuItems);
-        this.notifyMenu();
+        // 2. Categories
+        if (Array.isArray(allRes.categories) && allRes.categories.length > 0) {
+          const catNames = allRes.categories.map((c: any) => c.name || c);
+          settingsStore.updateSection('menu', { categories: catNames });
+        }
+
+        // 3. Raw Inventory
+        if (Array.isArray(allRes.inventory) && allRes.inventory.length > 0) {
+          this.ingredients = allRes.inventory;
+          persistentDb.saveInventory(this.ingredients);
+          this.notifyIngredients();
+        }
+
+        // 4. Orders History
+        if (Array.isArray(allRes.orders) && allRes.orders.length > 0) {
+          const orderMap = new Map<string, Order>();
+          allRes.orders.forEach((o: Order) => orderMap.set(o.id, o));
+          this.orders.forEach((o) => {
+            if (!orderMap.has(o.id)) orderMap.set(o.id, o);
+          });
+
+          this.orders = Array.from(orderMap.values()).sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+          persistentDb.saveOrders(this.orders);
+          this.recalculateTokenCounter();
+          this.notifyOrders();
+        }
+
+        // 5. Customers
+        if (allRes.customers) {
+          customerStore.loadFromGoogleSheets(allRes.customers);
+        }
+
+        // 6. Settings
+        if (allRes.settings) {
+          settingsStore.updateSettings(allRes.settings);
+        }
+
+        if (allRes.spreadsheetId) {
+          this.spreadsheetId = allRes.spreadsheetId;
+        }
+
+        this.googleSheetsConnected = true;
+        this.lastSyncedAt = new Date().toLocaleTimeString();
+        this.notifySyncStatus();
       }
-
-      if (inventoryData && Array.isArray(inventoryData.inventory) && inventoryData.inventory.length > 0) {
-        this.ingredients = inventoryData.inventory;
-        persistentDb.saveInventory(this.ingredients);
-        this.notifyIngredients();
-      }
-
-      if (ordersData && Array.isArray(ordersData.orders) && ordersData.orders.length > 0) {
-        const orderMap = new Map<string, Order>();
-        ordersData.orders.forEach((o: Order) => orderMap.set(o.id, o));
-        this.orders.forEach((o) => orderMap.set(o.id, o));
-
-        this.orders = Array.from(orderMap.values()).sort(
-          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-        );
-        persistentDb.saveOrders(this.orders);
-        this.recalculateTokenCounter();
-        this.notifyOrders();
-      }
-
-      this.lastSyncedAt = new Date().toLocaleTimeString();
-      this.notifySyncStatus();
     } catch (e) {
       console.error('Error fetching data from Google Sheets API:', e);
     }
