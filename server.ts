@@ -1,6 +1,6 @@
 import express from 'express';
 import path from 'path';
-import app from './api/app';
+import app from './api/index';
 
 // Dev & Standalone Container server initialization
 if (!process.env.VERCEL && !process.env.NOW_REGION) {
