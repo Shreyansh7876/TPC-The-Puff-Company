@@ -870,31 +870,104 @@ app.get('/api/sheets/orders', async (req, res) => {
     });
 
     const rows = response.data.values || [];
-    const orders = rows.map((row) => ({
-      id: row[0],
-      invoiceNo: row[1] || undefined,
-      tokenNo: parseInt(row[2], 10) || 101,
-      orderType: row[3] || 'Dine In',
-      customerName: row[4] || '',
-      customerMobile: row[5] || '',
-      subtotal: parseFloat(row[6]) || 0,
-      gstAmount: parseFloat(row[7]) || 0,
-      discount: parseFloat(row[8]) || 0,
-      total: parseFloat(row[9]) || 0,
-      paymentMode: row[10] || 'CASH',
-      status: row[11] || 'COMPLETED',
-      customerNotes: row[12] || '',
-      staffName: row[13] || 'Cashier',
-      deviceType: row[14] || 'mobile',
-      createdAt: row[15] || new Date().toISOString(),
-      cancelledAt: row[16] || undefined,
-      items: row[17] ? JSON.parse(row[17]) : []
-    })).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const orders = rows
+      .filter((row) => row && row[0])
+      .map((row) => {
+        const rawStatus = (row[11] || 'PENDING').toString().trim().toUpperCase();
+        const validStatuses = ['PENDING', 'PREPARING', 'READY', 'COMPLETED', 'CANCELLED', 'REFUNDED'];
+        const status = validStatuses.includes(rawStatus) ? rawStatus : 'PENDING';
+        return {
+          id: row[0],
+          invoiceNo: row[1] || undefined,
+          tokenNo: parseInt(row[2], 10) || 101,
+          orderType: row[3] || 'Dine In',
+          customerName: row[4] || '',
+          customerMobile: row[5] || '',
+          subtotal: parseFloat(row[6]) || 0,
+          gstAmount: parseFloat(row[7]) || 0,
+          discount: parseFloat(row[8]) || 0,
+          total: parseFloat(row[9]) || 0,
+          paymentMode: row[10] || 'CASH',
+          status,
+          customerNotes: row[12] || '',
+          staffName: row[13] || 'Cashier',
+          deviceType: row[14] || 'mobile',
+          createdAt: row[15] || new Date().toISOString(),
+          cancelledAt: row[16] || undefined,
+          items: row[17] ? JSON.parse(row[17]) : []
+        };
+      })
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
     memoryStore.orders = orders;
     return res.json({ orders, source: 'google_sheets' });
   } catch (err: any) {
     return res.json({ orders: memoryStore.orders, source: 'memory_fallback', error: err?.message });
+  }
+});
+
+// GET Active Kitchen KOTs
+app.get('/api/sheets/kot', async (req, res) => {
+  const spreadsheetId = resolveSpreadsheetId(req);
+  const auth = getGoogleAuthClient(req);
+
+  // Active status whitelist
+  const ACTIVE_STATUSES = new Set(['PENDING', 'PREPARING', 'READY']);
+
+  if (!auth || !spreadsheetId) {
+    const activeMemory = memoryStore.orders.filter((o) => ACTIVE_STATUSES.has(o.status));
+    return res.json({ success: true, kot: activeMemory, source: 'memory_cache' });
+  }
+
+  try {
+    const sheets = google.sheets({ version: 'v4', auth });
+    // Prefer Orders sheet as source of truth for items & details
+    const ordersRes = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${SHEET_NAMES.ORDERS}!A2:R`
+    });
+
+    const rows = ordersRes.data.values || [];
+    const activeOrders = rows
+      .filter((row) => row && row[0])
+      .map((row) => {
+        const rawStatus = (row[11] || 'PENDING').toString().trim().toUpperCase();
+        return {
+          id: row[0],
+          invoiceNo: row[1] || undefined,
+          tokenNo: parseInt(row[2], 10) || 101,
+          orderType: row[3] || 'Dine In',
+          customerName: row[4] || '',
+          customerMobile: row[5] || '',
+          subtotal: parseFloat(row[6]) || 0,
+          gstAmount: parseFloat(row[7]) || 0,
+          discount: parseFloat(row[8]) || 0,
+          total: parseFloat(row[9]) || 0,
+          paymentMode: row[10] || 'CASH',
+          status: rawStatus,
+          customerNotes: row[12] || '',
+          staffName: row[13] || 'Cashier',
+          deviceType: row[14] || 'mobile',
+          createdAt: row[15] || new Date().toISOString(),
+          cancelledAt: row[16] || undefined,
+          items: row[17] ? JSON.parse(row[17]) : []
+        };
+      })
+      .filter((o) => ACTIVE_STATUSES.has(o.status))
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    // Deduplicate by Order ID
+    const uniqueMap = new Map<string, any>();
+    activeOrders.forEach((o) => {
+      if (!uniqueMap.has(o.id)) {
+        uniqueMap.set(o.id, o);
+      }
+    });
+
+    return res.json({ success: true, kot: Array.from(uniqueMap.values()), source: 'google_sheets' });
+  } catch (err: any) {
+    const activeMemory = memoryStore.orders.filter((o) => ACTIVE_STATUSES.has(o.status));
+    return res.json({ success: true, kot: activeMemory, source: 'memory_fallback', error: err?.message });
   }
 });
 
@@ -907,9 +980,10 @@ app.post('/api/sheets/orders', async (req, res) => {
     return res.status(400).json({ error: 'Order data is required' });
   }
 
-  // Update in-memory cache
+  // Prevent duplicate order in-memory
   const existingIdx = memoryStore.orders.findIndex((o) => o.id === order.id);
   if (existingIdx !== -1) {
+    console.warn(`[Sync Warning] Duplicate order POST received for ID ${order.id}. Updating existing record.`);
     memoryStore.orders[existingIdx] = { ...memoryStore.orders[existingIdx], ...order };
   } else {
     memoryStore.orders.unshift(order);
@@ -943,53 +1017,93 @@ app.post('/api/sheets/orders', async (req, res) => {
         .map((i: any) => `${i.quantity}x ${i.itemName}`)
         .join(', ');
 
-      // 1. Append Order to Orders_Bills sheet
-      await sheets.spreadsheets.values.append({
-        spreadsheetId,
-        range: `${SHEET_NAMES.ORDERS}!A2`,
-        valueInputOption: 'USER_ENTERED',
-        requestBody: {
-          values: [[
-            order.id,
-            order.invoiceNo || '',
-            order.tokenNo,
-            order.orderType,
-            order.customerName || '',
-            order.customerMobile || '',
-            order.subtotal,
-            order.gstAmount,
-            order.discount || 0,
-            order.total,
-            order.paymentMode,
-            order.status,
-            order.customerNotes || '',
-            order.staffName || '',
-            order.deviceType || 'mobile',
-            order.createdAt,
-            order.cancelledAt || '',
-            JSON.stringify(order.items || [])
-          ]]
-        }
-      });
+      const orderRow = [
+        order.id,
+        order.invoiceNo || '',
+        order.tokenNo,
+        order.orderType,
+        order.customerName || '',
+        order.customerMobile || '',
+        order.subtotal,
+        order.gstAmount,
+        order.discount || 0,
+        order.total,
+        order.paymentMode,
+        order.status,
+        order.customerNotes || '',
+        order.staffName || '',
+        order.deviceType || 'mobile',
+        order.createdAt,
+        order.cancelledAt || '',
+        JSON.stringify(order.items || [])
+      ];
 
-      // 2. Append to KOT_Status sheet
-      await sheets.spreadsheets.values.append({
+      // 1. Check if Order already exists in Orders_Bills sheet (Idempotent upsert)
+      const existingOrdersRes = await sheets.spreadsheets.values.get({
         spreadsheetId,
-        range: `${SHEET_NAMES.KOT}!A2`,
-        valueInputOption: 'USER_ENTERED',
-        requestBody: {
-          values: [[
-            order.id,
-            order.tokenNo,
-            order.orderType,
-            order.tableOrName || '',
-            order.customerName || '',
-            order.status,
-            itemsSummary,
-            new Date().toISOString()
-          ]]
-        }
+        range: `${SHEET_NAMES.ORDERS}!A2:A`
       });
+      const orderIds = (existingOrdersRes.data.values || []).map((r) => r[0]);
+      const existingRowIndex = orderIds.indexOf(order.id);
+
+      if (existingRowIndex !== -1) {
+        // Update existing row
+        const rowNum = existingRowIndex + 2;
+        await sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `${SHEET_NAMES.ORDERS}!A${rowNum}:R${rowNum}`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [orderRow] }
+        });
+        console.log(`[Google Sheets Sync] Updated existing Order ${order.id} at row ${rowNum} in Orders sheet.`);
+      } else {
+        // Append new Order to Orders_Bills sheet
+        await sheets.spreadsheets.values.append({
+          spreadsheetId,
+          range: `${SHEET_NAMES.ORDERS}!A2`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [orderRow] }
+        });
+        console.log(`[Google Sheets Sync] Appended new Order ${order.id} to Orders sheet.`);
+      }
+
+      // 2. Manage KOT_Active sheet (Idempotent upsert)
+      const existingKotRes = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${SHEET_NAMES.KOT}!A2:A`
+      });
+      const kotIds = (existingKotRes.data.values || []).map((r) => r[0]);
+      const existingKotIndex = kotIds.indexOf(order.id);
+
+      const kotRow = [
+        order.id,
+        order.tokenNo,
+        order.orderType,
+        order.tableOrName || '',
+        order.customerName || '',
+        order.status,
+        itemsSummary,
+        new Date().toISOString()
+      ];
+
+      if (existingKotIndex !== -1) {
+        const kotRowNum = existingKotIndex + 2;
+        await sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `${SHEET_NAMES.KOT}!A${kotRowNum}:H${kotRowNum}`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [kotRow] }
+        });
+        console.log(`[Google Sheets Sync] Updated existing KOT ${order.id} at row ${kotRowNum} in KOT_Active sheet.`);
+      } else {
+        await sheets.spreadsheets.values.append({
+          spreadsheetId,
+          range: `${SHEET_NAMES.KOT}!A2`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [kotRow] }
+        });
+        console.log(`[Google Sheets Sync] Appended new KOT ${order.id} to KOT_Active sheet.`);
+      }
 
       // 3. Upsert Customer row in Customers sheet if phone provided
       if (order.customerMobile) {
@@ -1041,26 +1155,93 @@ app.put('/api/sheets/orders/status', async (req, res) => {
   if (spreadsheetId && auth) {
     try {
       const sheets = google.sheets({ version: 'v4', auth });
-      // Record update event in KOT_Status
-      await sheets.spreadsheets.values.append({
+
+      // 1. UPDATE ORDERS SHEET (Column L is Status, Column Q is Cancelled_At)
+      const ordersRes = await sheets.spreadsheets.values.get({
         spreadsheetId,
-        range: `${SHEET_NAMES.KOT}!A2`,
-        valueInputOption: 'USER_ENTERED',
-        requestBody: {
-          values: [[
-            orderId,
-            memoryStore.orders[idx]?.tokenNo || '',
-            memoryStore.orders[idx]?.orderType || '',
-            memoryStore.orders[idx]?.tableOrName || '',
-            memoryStore.orders[idx]?.customerName || '',
-            status,
-            `Status updated to ${status}${cancellationReason ? ` (Reason: ${cancellationReason})` : ''}`,
-            now
-          ]]
-        }
+        range: `${SHEET_NAMES.ORDERS}!A2:A`
       });
-    } catch (e) {
-      console.error('Error recording status update in Google Sheets:', e);
+      const orderIds = (ordersRes.data.values || []).map((r) => r[0]);
+      const orderIndex = orderIds.indexOf(orderId);
+
+      if (orderIndex !== -1) {
+        const rowNum = orderIndex + 2;
+        // Update Status in Column L
+        await sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `${SHEET_NAMES.ORDERS}!L${rowNum}`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [[status]] }
+        });
+
+        // If Cancelled or Refunded, update Cancelled_At in Column Q
+        if (status === 'CANCELLED' || status === 'REFUNDED') {
+          await sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: `${SHEET_NAMES.ORDERS}!Q${rowNum}`,
+            valueInputOption: 'USER_ENTERED',
+            requestBody: { values: [[now]] }
+          });
+        }
+        console.log(`[Google Sheets Sync] Order ${orderId} status successfully updated to '${status}' at row ${rowNum} in Orders sheet.`);
+      } else {
+        console.warn(`[Google Sheets Sync] Order ${orderId} not found in Orders sheet for status update.`);
+      }
+
+      // 2. UPDATE KOT_ACTIVE SHEET (Column F is Status, Column H is Updated_At)
+      const kotRes = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${SHEET_NAMES.KOT}!A2:A`
+      });
+      const kotIds = (kotRes.data.values || []).map((r) => r[0]);
+      
+      // Find all rows matching orderId (in case duplicates were previously added)
+      const matchingRowIndices: number[] = [];
+      kotIds.forEach((id, idx) => {
+        if (id === orderId) matchingRowIndices.push(idx + 2);
+      });
+
+      if (matchingRowIndices.length > 0) {
+        for (const rowNum of matchingRowIndices) {
+          await sheets.spreadsheets.values.update({
+            spreadsheetId,
+            range: `${SHEET_NAMES.KOT}!F${rowNum}:H${rowNum}`,
+            valueInputOption: 'USER_ENTERED',
+            requestBody: {
+              values: [[
+                status,
+                `Status: ${status}${cancellationReason ? ` (${cancellationReason})` : ''}`,
+                now
+              ]]
+            }
+          });
+        }
+        console.log(`[Google Sheets Sync] KOT ${orderId} status successfully updated to '${status}' in KOT_Active sheet (rows: ${matchingRowIndices.join(', ')}).`);
+      } else if (status === 'PENDING' || status === 'PREPARING' || status === 'READY') {
+        // If not present and active, append it
+        const currentOrder = memoryStore.orders[idx];
+        const itemsSummary = (currentOrder?.items || []).map((i: any) => `${i.quantity}x ${i.itemName}`).join(', ');
+        await sheets.spreadsheets.values.append({
+          spreadsheetId,
+          range: `${SHEET_NAMES.KOT}!A2`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: {
+            values: [[
+              orderId,
+              currentOrder?.tokenNo || '',
+              currentOrder?.orderType || '',
+              currentOrder?.tableOrName || '',
+              currentOrder?.customerName || '',
+              status,
+              itemsSummary || `Status: ${status}`,
+              now
+            ]]
+          }
+        });
+        console.log(`[Google Sheets Sync] Appended active KOT ${orderId} (${status}) to KOT_Active sheet.`);
+      }
+    } catch (e: any) {
+      console.error('Error recording status update in Google Sheets:', e?.message || e);
     }
   }
 

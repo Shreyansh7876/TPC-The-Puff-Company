@@ -26,8 +26,30 @@ export const KOTDisplay: React.FC<KOTDisplayProps> = ({ orders }) => {
   const [cancellingOrder, setCancellingOrder] = useState<Order | null>(null);
   const [printingOrder, setPrintingOrder] = useState<Order | null>(null);
 
+  // Strict deduplication by unique Order ID
+  const uniqueOrders = React.useMemo(() => {
+    const seen = new Set<string>();
+    const list: Order[] = [];
+    for (const ord of orders) {
+      if (!ord || !ord.id) continue;
+      if (!seen.has(ord.id)) {
+        seen.add(ord.id);
+        list.push(ord);
+      } else {
+        console.warn(`[KOT Display] Deduplicated repeated order instance: ${ord.id} (Token #${ord.tokenNo})`);
+      }
+    }
+    return list;
+  }, [orders]);
+
+  const activeOrders = React.useMemo(() => {
+    return uniqueOrders.filter(
+      (o) => o.status === 'PENDING' || o.status === 'PREPARING' || o.status === 'READY'
+    );
+  }, [uniqueOrders]);
+
   useEffect(() => {
-    const pendingCount = orders.filter((o) => o.status === 'PENDING').length;
+    const pendingCount = activeOrders.filter((o) => o.status === 'PENDING').length;
     if (pendingCount > 0 && typeof window !== 'undefined') {
       try {
         const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
@@ -37,14 +59,18 @@ export const KOTDisplay: React.FC<KOTDisplayProps> = ({ orders }) => {
         // silent fallback
       }
     }
-  }, [orders.length]);
+  }, [activeOrders.length]);
 
-  const filteredOrders = orders.filter((order) => {
+  const filteredOrders = React.useMemo(() => {
     if (filterStatus === 'ACTIVE') {
-      return order.status === 'PENDING' || order.status === 'PREPARING' || order.status === 'READY';
+      // Completed, Cancelled, and Refunded MUST NEVER appear in ACTIVE queue
+      return activeOrders;
     }
-    return order.status === filterStatus;
-  });
+    if (filterStatus === 'CANCELLED') {
+      return uniqueOrders.filter((o) => o.status === 'CANCELLED' || o.status === 'REFUNDED');
+    }
+    return uniqueOrders.filter((o) => o.status === filterStatus);
+  }, [filterStatus, activeOrders, uniqueOrders]);
 
   const getStatusStyle = (status: OrderStatus) => {
     switch (status) {
@@ -118,7 +144,7 @@ export const KOTDisplay: React.FC<KOTDisplayProps> = ({ orders }) => {
                 THE PUFF CO. — Kitchen KOT
               </h2>
               <span className="bg-[#8c3a27] text-[#f4efe8] text-xs font-bold px-2.5 py-0.5 rounded-md border border-[#f4efe8]/20">
-                {orders.filter((o) => o.status !== 'COMPLETED' && o.status !== 'CANCELLED').length} ACTIVE
+                {activeOrders.length} ACTIVE
               </span>
             </div>
             <p className="text-xs text-[#e2d7c9] mt-0.5">
@@ -129,17 +155,29 @@ export const KOTDisplay: React.FC<KOTDisplayProps> = ({ orders }) => {
 
         {/* Status Filters */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
-          {['ACTIVE', 'PENDING', 'PREPARING', 'READY', 'COMPLETED', 'CANCELLED'].map((st) => (
+          {[
+            { id: 'ACTIVE', label: 'ACTIVE', count: activeOrders.length },
+            { id: 'PENDING', label: 'PENDING', count: uniqueOrders.filter((o) => o.status === 'PENDING').length },
+            { id: 'PREPARING', label: 'PREPARING', count: uniqueOrders.filter((o) => o.status === 'PREPARING').length },
+            { id: 'READY', label: 'READY', count: uniqueOrders.filter((o) => o.status === 'READY').length },
+            { id: 'COMPLETED', label: 'COMPLETED', count: uniqueOrders.filter((o) => o.status === 'COMPLETED').length },
+            { id: 'CANCELLED', label: 'CANCELLED', count: uniqueOrders.filter((o) => o.status === 'CANCELLED' || o.status === 'REFUNDED').length }
+          ].map((tab) => (
             <button
-              key={st}
-              onClick={() => setFilterStatus(st)}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-                filterStatus === st
+              key={tab.id}
+              onClick={() => setFilterStatus(tab.id)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+                filterStatus === tab.id
                   ? 'bg-[#8c3a27] text-[#f4efe8] shadow-md font-extrabold'
                   : 'bg-[#231916] text-[#e2d7c9] hover:text-[#f4efe8] hover:bg-[#2e211d]'
               }`}
             >
-              {st}
+              <span>{tab.label}</span>
+              <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                filterStatus === tab.id ? 'bg-white/20 text-white' : 'bg-black/30 text-[#e2d7c9]'
+              }`}>
+                {tab.count}
+              </span>
             </button>
           ))}
         </div>

@@ -80,16 +80,8 @@ class LivePuffStore {
       const indexedData = await persistentDb.loadAllFromIndexedDB();
       if (indexedData) {
         let updated = false;
-        if (indexedData.orders.length > this.orders.length) {
-          // Merge by ID
-          const orderMap = new Map<string, Order>();
-          indexedData.orders.forEach((o) => orderMap.set(o.id, o));
-          this.orders.forEach((o) => orderMap.set(o.id, o));
-          this.orders = Array.from(orderMap.values()).sort(
-            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-          );
-          persistentDb.saveOrders(this.orders);
-          this.recalculateTokenCounter();
+        if (Array.isArray(indexedData.orders) && indexedData.orders.length > 0) {
+          this.mergeOrdersWithProtection(indexedData.orders);
           updated = true;
         }
 
@@ -182,19 +174,9 @@ class LivePuffStore {
       }).catch(() => null);
 
       if (res && res.success) {
-        // Merge merged orders from server
+        // Merge merged orders from server with terminal status protection
         if (Array.isArray(res.orders)) {
-          const serverOrders: Order[] = res.orders;
-          const orderMap = new Map<string, Order>();
-          serverOrders.forEach((o) => orderMap.set(o.id, o));
-          this.orders.forEach((o) => orderMap.set(o.id, o));
-
-          this.orders = Array.from(orderMap.values()).sort(
-            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-          );
-          persistentDb.saveOrders(this.orders);
-          this.recalculateTokenCounter();
-          this.notifyOrders();
+          this.mergeOrdersWithProtection(res.orders);
         }
 
         if (Array.isArray(res.inventory) && res.inventory.length > 0) {
@@ -310,20 +292,9 @@ class LivePuffStore {
           this.notifyIngredients();
         }
 
-        // 4. Orders History
+        // 4. Orders History with deduplication & protection
         if (Array.isArray(allRes.orders) && allRes.orders.length > 0) {
-          const orderMap = new Map<string, Order>();
-          allRes.orders.forEach((o: Order) => orderMap.set(o.id, o));
-          this.orders.forEach((o) => {
-            if (!orderMap.has(o.id)) orderMap.set(o.id, o);
-          });
-
-          this.orders = Array.from(orderMap.values()).sort(
-            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-          );
-          persistentDb.saveOrders(this.orders);
-          this.recalculateTokenCounter();
-          this.notifyOrders();
+          this.mergeOrdersWithProtection(allRes.orders);
         }
 
         // 5. Customers
@@ -384,6 +355,110 @@ class LivePuffStore {
     } catch (e: any) {
       return { success: false, error: e.message || 'Network error connecting to Google Sheets' };
     }
+  }
+
+  /**
+   * Intelligently merges incoming orders from Google Sheets or server while strictly
+   * protecting terminal order states (COMPLETED, CANCELLED, REFUNDED).
+   * Prevents completed or cancelled KOTs from ever reappearing as active.
+   */
+  private mergeOrdersWithProtection(incomingOrders: Order[]): void {
+    if (!Array.isArray(incomingOrders) || incomingOrders.length === 0) return;
+
+    const TERMINAL_STATUSES = new Set<string>(['COMPLETED', 'CANCELLED', 'REFUNDED']);
+
+    // Map keyed strictly by order.id to enforce uniqueness
+    const mergedMap = new Map<string, Order>();
+
+    // 1. Seed with local orders
+    this.orders.forEach((local) => {
+      if (local && local.id) {
+        mergedMap.set(local.id, local);
+      }
+    });
+
+    // 2. Intelligently merge incoming orders from Google Sheets / server
+    incomingOrders.forEach((incoming) => {
+      if (!incoming || !incoming.id) return;
+
+      const local = mergedMap.get(incoming.id);
+
+      if (!local) {
+        // New order from remote: add directly
+        mergedMap.set(incoming.id, incoming);
+        return;
+      }
+
+      const localIsTerminal = TERMINAL_STATUSES.has(local.status);
+      const incomingIsTerminal = TERMINAL_STATUSES.has(incoming.status);
+
+      if (localIsTerminal && !incomingIsTerminal) {
+        // Stale Google Sheets row must NEVER resurrect a completed/cancelled order!
+        console.warn(
+          `[KOT Protection] Blocking stale Google Sheets status '${incoming.status}' from resurrecting ${local.status} Order #${local.tokenNo} (${local.id}). Retaining local ${local.status}.`
+        );
+        mergedMap.set(local.id, local);
+
+        // Resync status to Google Sheets to rectify remote sheet
+        fetch('/api/sheets/orders/status', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            orderId: local.id,
+            status: local.status,
+            cancellationReason: local.cancellationReason,
+            cancelledBy: local.cancelledBy,
+            spreadsheetId: this.spreadsheetId,
+          }),
+        }).catch(() => {});
+      } else if (incomingIsTerminal && !localIsTerminal) {
+        // Google Sheets has marked it terminal (Completed/Cancelled); update local state
+        console.log(
+          `[KOT Sync] Order #${incoming.tokenNo} (${incoming.id}) updated to ${incoming.status} from Google Sheets.`
+        );
+        mergedMap.set(incoming.id, {
+          ...local,
+          ...incoming,
+          status: incoming.status,
+          cancelledAt: incoming.cancelledAt || local.cancelledAt,
+          cancellationReason: incoming.cancellationReason || local.cancellationReason,
+          cancelledBy: incoming.cancelledBy || local.cancelledBy,
+        });
+      } else {
+        // Both are terminal or both are active
+        const statusPriority: Record<string, number> = {
+          PENDING: 1,
+          PREPARING: 2,
+          READY: 3,
+          COMPLETED: 4,
+          CANCELLED: 4,
+          REFUNDED: 4,
+        };
+
+        const localPriority = statusPriority[local.status] || 0;
+        const incomingPriority = statusPriority[incoming.status] || 0;
+
+        if (localPriority > incomingPriority) {
+          mergedMap.set(local.id, local);
+        } else if (incomingPriority > localPriority) {
+          mergedMap.set(incoming.id, { ...local, ...incoming });
+        } else {
+          const localTime = new Date(local.cancelledAt || local.createdAt).getTime();
+          const incomingTime = new Date(incoming.cancelledAt || incoming.createdAt).getTime();
+          mergedMap.set(local.id, incomingTime >= localTime ? { ...local, ...incoming } : local);
+        }
+      }
+    });
+
+    // 3. Deduplicate and sort by createdAt descending
+    this.orders = Array.from(mergedMap.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+
+    // 4. Save to persistent storage and notify
+    persistentDb.saveOrders(this.orders);
+    this.recalculateTokenCounter();
+    this.notifyOrders();
   }
 
   private notifyMenu() {
