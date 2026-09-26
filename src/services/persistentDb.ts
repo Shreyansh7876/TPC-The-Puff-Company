@@ -1,5 +1,4 @@
 import { Order, Ingredient, PuffItem, AppMasterSettings } from '../types';
-import { INITIAL_MENU_ITEMS, INITIAL_INGREDIENTS } from '../config/defaultSeed';
 
 const DB_NAME = 'ThePuffCoPOS_DB_v2';
 const DB_VERSION = 1;
@@ -113,7 +112,7 @@ class PersistentDatabaseService {
   }
 
   public getSyncInventory(): Ingredient[] {
-    if (typeof window === 'undefined') return [...INITIAL_INGREDIENTS];
+    if (typeof window === 'undefined') return [];
     try {
       const data = localStorage.getItem(KEYS.INVENTORY);
       if (data !== null) {
@@ -123,11 +122,11 @@ class PersistentDatabaseService {
     } catch (e) {
       console.warn('Failed to parse inventory from LocalStorage:', e);
     }
-    return [...INITIAL_INGREDIENTS];
+    return [];
   }
 
   public getSyncMenu(): PuffItem[] {
-    if (typeof window === 'undefined') return [...INITIAL_MENU_ITEMS];
+    if (typeof window === 'undefined') return [];
     try {
       const data = localStorage.getItem(KEYS.MENU);
       if (data !== null) {
@@ -137,7 +136,7 @@ class PersistentDatabaseService {
     } catch (e) {
       console.warn('Failed to parse menu from LocalStorage:', e);
     }
-    return [...INITIAL_MENU_ITEMS];
+    return [];
   }
 
   public getSyncCustomers(): Record<string, { name?: string; notes?: string }> {

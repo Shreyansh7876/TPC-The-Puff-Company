@@ -48,13 +48,7 @@ const INITIAL_SETTINGS: AppMasterSettings = {
     enableAuditTracking: true,
   },
   menu: {
-    categories: [
-      'Classic & Single Flavor Puffs',
-      'Flavored Combo Puffs',
-      'Chatni, Tandoori & Loaded Puffs',
-      'Supreme Garlic & Double Cheese Puffs',
-      'Company Signature Specials'
-    ],
+    categories: [],
     productSorting: 'DEFAULT',
     quickAccessProductIds: [],
   },
@@ -67,7 +61,7 @@ const INITIAL_SETTINGS: AppMasterSettings = {
   },
   pos: {
     defaultViewMode: 'laptop_pos',
-    defaultCategory: 'Classic & Single Flavor Puffs',
+    defaultCategory: '',
     defaultPaymentMethod: 'UPI',
     requireOrderConfirmation: true,
     soundAlerts: true,
@@ -154,7 +148,7 @@ class SettingsStore {
 
         const rawCategories = Array.isArray(parsed.menu?.categories)
           ? parsed.menu.categories
-          : INITIAL_SETTINGS.menu.categories;
+          : [];
         const cleanCategories = rawCategories.filter((c: string) => !this.deletedCategories.has(c));
 
         this.settings = { 
@@ -163,7 +157,7 @@ class SettingsStore {
           menu: {
             ...INITIAL_SETTINGS.menu,
             ...(parsed.menu || {}),
-            categories: cleanCategories.length > 0 ? cleanCategories : (rawCategories.length > 0 ? cleanCategories : ['General'])
+            categories: cleanCategories
           },
           inventory: {
             ...INITIAL_SETTINGS.inventory,
@@ -280,7 +274,7 @@ class SettingsStore {
     this.settings.menu.categories = updated;
 
     if (this.settings.pos.defaultCategory === trimmed) {
-      this.settings.pos.defaultCategory = updated[0] || 'General';
+      this.settings.pos.defaultCategory = updated[0] || '';
     }
 
     this.saveToLocalStorage(true);
@@ -341,8 +335,6 @@ class SettingsStore {
     const clean = remoteCategories
       .map((c) => (typeof c === 'string' ? c.trim() : ''))
       .filter((c) => Boolean(c) && !this.deletedCategories.has(c));
-
-    if (clean.length === 0) return;
 
     // Check if distinct from current
     const currentStr = JSON.stringify(this.settings.menu.categories);

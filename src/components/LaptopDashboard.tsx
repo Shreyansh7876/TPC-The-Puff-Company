@@ -578,82 +578,93 @@ export const LaptopDashboard: React.FC<LaptopDashboardProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#a19284]/20 font-medium">
-                  {ingredients.map((ing) => {
-                    const isLow = ing.currentStock <= ing.minStockAlert;
-                    const stockPercentage = Math.min(100, Math.round((ing.currentStock / (ing.minStockAlert * 3)) * 100));
+                  {ingredients.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="p-8 text-center text-[#a19284]">
+                        No inventory items found. Add ingredients using the button above.
+                      </td>
+                    </tr>
+                  ) : (
+                    ingredients.map((ing) => {
+                      const isLow = ing.currentStock <= ing.minStockAlert;
+                      const stockPercentage = Math.min(100, Math.round((ing.currentStock / (ing.minStockAlert * 3)) * 100));
 
-                    return (
-                      <tr key={ing.id} className="hover:bg-[#f4efe8]/50 transition-colors">
-                        <td className="p-3.5 font-bold text-[#2e211d]">
-                          {ing.name}
-                        </td>
-                        <td className="p-3.5">
-                          <span className="bg-[#e2d7c9]/40 text-[#2e211d] px-2 py-0.5 rounded text-[10px] font-semibold">
-                            {ing.category}
-                          </span>
-                        </td>
-                        <td className="p-3.5 font-bold text-[#8c3a27] text-sm">
-                          {ing.currentStock} {ing.unit}
-                        </td>
-                        <td className="p-3.5 text-[#a19284]">
-                          {ing.minStockAlert} {ing.unit}
-                        </td>
-                        <td className="p-3.5">
-                          {isLow ? (
-                            <span className="inline-flex items-center gap-1 bg-[#8c3a27]/10 text-[#8c3a27] text-[10px] font-bold px-2.5 py-1 rounded-full border border-[#8c3a27]/30">
-                              <AlertTriangle className="w-3 h-3 text-[#8c3a27]" />
-                              LOW STOCK ALERT
+                      return (
+                        <tr key={ing.id} className="hover:bg-[#f4efe8]/50 transition-colors">
+                          <td className="p-3.5 font-bold text-[#2e211d]">
+                            {ing.name}
+                          </td>
+                          <td className="p-3.5">
+                            <span className="bg-[#e2d7c9]/40 text-[#2e211d] px-2 py-0.5 rounded text-[10px] font-semibold">
+                              {ing.category}
                             </span>
-                          ) : (
-                            <div className="w-32 bg-[#e2d7c9]/40 h-2 rounded-full overflow-hidden">
-                              <div
-                                className="bg-[#8c3a27] h-full rounded-full transition-all"
-                                style={{ width: `${stockPercentage}%` }}
-                              />
-                            </div>
-                          )}
-                        </td>
-                        <td className="p-3.5 text-right space-x-1.5 whitespace-nowrap">
-                          <button
-                            onClick={() => {
-                              setRefillingIngredient(ing);
-                              setNewStockVal(ing.currentStock);
-                            }}
-                            className="px-2.5 py-1 bg-[#8c3a27] hover:bg-[#722f1f] text-[#f4efe8] rounded-lg text-[11px] font-bold transition-all shadow-sm"
-                          >
-                            Refill
-                          </button>
-                          <button
-                            onClick={() => {
-                              setEditingIngredient(ing);
-                              setEditingIngForm({
-                                name: ing.name,
-                                category: ing.category || 'Dry Goods',
-                                unit: ing.unit || 'grams',
-                                currentStock: ing.currentStock,
-                                minStockAlert: ing.minStockAlert,
-                                costPerUnit: ing.costPerUnit || 0.2,
-                              });
-                            }}
-                            className="px-2.5 py-1 bg-[#2e211d] hover:bg-[#1b1311] text-[#f4efe8] rounded-lg text-[11px] font-bold transition-all"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => {
-                              if (confirm(`Are you sure you want to delete ingredient "${ing.name}"? This will remove it from inventory and recipe mappings.`)) {
-                                livePuffStore.deleteIngredient(ing.id);
-                              }
-                            }}
-                            className="px-2 py-1 bg-rose-100 hover:bg-rose-200 text-rose-800 rounded-lg text-[11px] font-bold transition-all"
-                            title="Delete Ingredient"
-                          >
-                            <Trash2 className="w-3.5 h-3.5 inline" />
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                          </td>
+                          <td className="p-3.5 font-bold text-[#8c3a27] text-sm">
+                            {ing.currentStock} {ing.unit}
+                          </td>
+                          <td className="p-3.5 text-[#a19284]">
+                            {ing.minStockAlert} {ing.unit}
+                          </td>
+                          <td className="p-3.5">
+                            {isLow ? (
+                              <span className="inline-flex items-center gap-1 bg-[#8c3a27]/10 text-[#8c3a27] text-[10px] font-bold px-2.5 py-1 rounded-full border border-[#8c3a27]/30">
+                                <AlertTriangle className="w-3 h-3 text-[#8c3a27]" />
+                                LOW STOCK ALERT
+                              </span>
+                            ) : (
+                              <div className="w-32 bg-[#e2d7c9]/40 h-2 rounded-full overflow-hidden">
+                                <div
+                                  className="bg-[#8c3a27] h-full rounded-full transition-all"
+                                  style={{ width: `${stockPercentage}%` }}
+                                />
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-3.5 text-right space-x-1.5 whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRefillingIngredient(ing);
+                                setNewStockVal(ing.currentStock);
+                              }}
+                              className="px-2.5 py-1 bg-[#8c3a27] hover:bg-[#722f1f] text-[#f4efe8] rounded-lg text-[11px] font-bold transition-all shadow-sm"
+                            >
+                              Refill
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingIngredient(ing);
+                                setEditingIngForm({
+                                  name: ing.name,
+                                  category: ing.category || 'Dry Goods',
+                                  unit: ing.unit || 'grams',
+                                  currentStock: ing.currentStock,
+                                  minStockAlert: ing.minStockAlert,
+                                  costPerUnit: ing.costPerUnit || 0.2,
+                                });
+                              }}
+                              className="px-2.5 py-1 bg-[#2e211d] hover:bg-[#1b1311] text-[#f4efe8] rounded-lg text-[11px] font-bold transition-all"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (confirm(`Are you sure you want to delete ingredient "${ing.name}"? This will remove it from inventory and recipe mappings.`)) {
+                                  livePuffStore.deleteIngredient(ing.id);
+                                }
+                              }}
+                              className="px-2 py-1 bg-rose-100 hover:bg-rose-200 text-rose-800 rounded-lg text-[11px] font-bold transition-all"
+                              title="Delete Ingredient"
+                            >
+                              <Trash2 className="w-3.5 h-3.5 inline" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </div>

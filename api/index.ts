@@ -623,74 +623,8 @@ app.post('/api/sheets/init', async (req, res) => {
     memoryStore.spreadsheetId = spreadsheetId;
     await ensureSpreadsheetStructure(sheets, spreadsheetId);
 
-    // Only seed defaults if the spreadsheet is completely fresh (all tabs empty)
-    try {
-      const [menuCheck, catCheck, invCheck] = await Promise.all([
-        sheets.spreadsheets.values.get({ spreadsheetId, range: `${SHEET_NAMES.MENU}!A2:B2` }).catch(() => ({ data: { values: [] } })),
-        sheets.spreadsheets.values.get({ spreadsheetId, range: `${SHEET_NAMES.CATEGORIES}!A2:B2` }).catch(() => ({ data: { values: [] } })),
-        sheets.spreadsheets.values.get({ spreadsheetId, range: `${SHEET_NAMES.INVENTORY}!A2:B2` }).catch(() => ({ data: { values: [] } })),
-      ]);
-
-      const hasMenuData = menuCheck.data?.values && menuCheck.data.values.length > 0;
-      const hasCatData = catCheck.data?.values && catCheck.data.values.length > 0;
-      const hasInvData = invCheck.data?.values && invCheck.data.values.length > 0;
-
-      // Only seed initial defaults if the spreadsheet has zero data in all three master tabs
-      if (!hasMenuData && !hasCatData && !hasInvData) {
-        // Seed initial menu
-        const menuRows = INITIAL_MENU_ITEMS.map((item) => [
-          item.id,
-          item.name,
-          item.category,
-          item.price,
-          item.isVeg ? 'TRUE' : 'FALSE',
-          item.description,
-          item.isAvailable ? 'TRUE' : 'FALSE',
-          item.image,
-          JSON.stringify(item.recipe || [])
-        ]);
-        await sheets.spreadsheets.values.append({
-          spreadsheetId,
-          range: `${SHEET_NAMES.MENU}!A2`,
-          valueInputOption: 'USER_ENTERED',
-          requestBody: { values: menuRows }
-        });
-
-        // Seed initial categories
-        const catRows = INITIAL_CATEGORIES.map((cat) => [
-          cat.id,
-          cat.name,
-          cat.sortOrder,
-          cat.isActive ? 'TRUE' : 'FALSE'
-        ]);
-        await sheets.spreadsheets.values.append({
-          spreadsheetId,
-          range: `${SHEET_NAMES.CATEGORIES}!A2`,
-          valueInputOption: 'USER_ENTERED',
-          requestBody: { values: catRows }
-        });
-
-        // Seed initial inventory
-        const invRows = INITIAL_INGREDIENTS.map((ing) => [
-          ing.id,
-          ing.name,
-          ing.unit,
-          ing.currentStock,
-          ing.minStockAlert,
-          ing.costPerUnit,
-          ing.category
-        ]);
-        await sheets.spreadsheets.values.append({
-          spreadsheetId,
-          range: `${SHEET_NAMES.INVENTORY}!A2`,
-          valueInputOption: 'USER_ENTERED',
-          requestBody: { values: invRows }
-        });
-      }
-    } catch (seedErr) {
-      console.warn('Notice while checking/seeding menu items in sheet:', seedErr);
-    }
-
+    // EMPTY DATA IS VALID DATA: Do NOT automatically seed default menu, categories, or inventory.
+    // If the spreadsheet is empty, it remains completely empty.
     const spreadsheetUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
     return res.json({
       success: true,
@@ -717,9 +651,9 @@ app.get('/api/sheets/all', async (req, res) => {
     return res.json({
       success: true,
       source: 'memory_cache',
-      menu: memoryStore.menu.length > 0 ? memoryStore.menu : INITIAL_MENU_ITEMS,
-      categories: memoryStore.categories.length > 0 ? memoryStore.categories : INITIAL_CATEGORIES,
-      inventory: memoryStore.inventory.length > 0 ? memoryStore.inventory : INITIAL_INGREDIENTS,
+      menu: memoryStore.menu,
+      categories: memoryStore.categories,
+      inventory: memoryStore.inventory,
       orders: memoryStore.orders,
       customers: memoryStore.customers,
       settings: memoryStore.settings,
@@ -837,9 +771,9 @@ app.get('/api/sheets/all', async (req, res) => {
     });
 
     // Update in-memory cache directly with genuine Google Sheets rows
-    if (menu.length > 0) memoryStore.menu = menu;
+    memoryStore.menu = menu;
     memoryStore.categories = categories;
-    if (inventory.length > 0) memoryStore.inventory = inventory;
+    memoryStore.inventory = inventory;
     if (orders.length > 0) memoryStore.orders = orders;
     if (Object.keys(customersMap).length > 0) memoryStore.customers = customersMap;
     if (settings) memoryStore.settings = settings;
@@ -1382,7 +1316,7 @@ app.get('/api/sheets/inventory', async (req, res) => {
         };
       });
 
-    if (inventory.length > 0) memoryStore.inventory = inventory;
+    memoryStore.inventory = inventory;
     return res.json({ inventory: memoryStore.inventory, source: 'google_sheets' });
   } catch (e: any) {
     return res.json({ inventory: memoryStore.inventory, source: 'memory_fallback', error: e?.message });
@@ -1394,7 +1328,7 @@ app.post('/api/sheets/inventory', async (req, res) => {
   const spreadsheetId = resolveSpreadsheetId(req);
   const auth = getGoogleAuthClient(req);
 
-  if (Array.isArray(inventory) && inventory.length > 0) {
+  if (Array.isArray(inventory)) {
     memoryStore.inventory = inventory;
   } else if (item) {
     if (action === 'delete') {
@@ -1423,12 +1357,14 @@ app.post('/api/sheets/inventory', async (req, res) => {
         ing.category
       ]);
       await sheets.spreadsheets.values.clear({ spreadsheetId, range: `${SHEET_NAMES.INVENTORY}!A2:G` });
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: `${SHEET_NAMES.INVENTORY}!A2`,
-        valueInputOption: 'USER_ENTERED',
-        requestBody: { values: rows }
-      });
+      if (rows.length > 0) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `${SHEET_NAMES.INVENTORY}!A2`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: rows }
+        });
+      }
     } catch (e) {
       console.error('Error updating Google Sheets Inventory:', e);
     }
@@ -1560,7 +1496,7 @@ app.get('/api/sheets/menu', async (req, res) => {
       recipe: row[8] ? JSON.parse(row[8]) : []
     }));
 
-    if (menu.length > 0) memoryStore.menu = menu;
+    memoryStore.menu = menu;
     return res.json({ menu: memoryStore.menu, source: 'google_sheets' });
   } catch (e: any) {
     return res.json({ menu: memoryStore.menu, source: 'memory_fallback', error: e?.message });
@@ -1602,12 +1538,14 @@ app.post('/api/sheets/menu', async (req, res) => {
         JSON.stringify(m.recipe || [])
       ]);
       await sheets.spreadsheets.values.clear({ spreadsheetId, range: `${SHEET_NAMES.MENU}!A2:I` });
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: `${SHEET_NAMES.MENU}!A2`,
-        valueInputOption: 'USER_ENTERED',
-        requestBody: { values: rows }
-      });
+      if (rows.length > 0) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `${SHEET_NAMES.MENU}!A2`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: rows }
+        });
+      }
     } catch (e) {
       console.error('Error saving Menu to Google Sheets:', e);
     }
@@ -1821,8 +1759,8 @@ app.post('/api/store/sync', (req, res) => {
       );
     }
 
-    if (Array.isArray(inventory) && inventory.length > 0) memoryStore.inventory = inventory;
-    if (Array.isArray(menu) && menu.length > 0) memoryStore.menu = menu;
+    if (Array.isArray(inventory)) memoryStore.inventory = inventory;
+    if (Array.isArray(menu)) memoryStore.menu = menu;
     if (customers && typeof customers === 'object') memoryStore.customers = { ...memoryStore.customers, ...customers };
     if (settings && typeof settings === 'object') memoryStore.settings = { ...(memoryStore.settings || {}), ...settings };
 

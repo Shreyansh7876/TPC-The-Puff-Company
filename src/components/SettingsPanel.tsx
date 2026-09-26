@@ -481,14 +481,9 @@ export const SettingsPanel: React.FC = () => {
   };
 
   const handleRequestDeleteCategory = (catName: string) => {
-    if (settings.menu.categories.length <= 1) {
-      alert('Cannot delete the last category. At least one category must exist in the store system.');
-      return;
-    }
-
     const itemsInCat = livePuffStore.getMenuItems().filter((item) => item.category === catName);
     const remainingCats = settings.menu.categories.filter((c) => c !== catName);
-    const defaultTarget = remainingCats[0] || 'General';
+    const defaultTarget = remainingCats[0] || '';
 
     setDeletingCategoryInfo({
       categoryName: catName,
@@ -572,8 +567,7 @@ export const SettingsPanel: React.FC = () => {
 
     // Auto add category to settings if new
     if (!settings.menu.categories.includes(targetCategory)) {
-      const updatedCats = [...settings.menu.categories, targetCategory];
-      settingsStore.updateSection('menu', { categories: updatedCats });
+      settingsStore.addCategory(targetCategory);
     }
 
     const payload = {
@@ -2518,31 +2512,35 @@ export const SettingsPanel: React.FC = () => {
                   This category contains <strong>{deletingCategoryInfo.itemCount} menu item(s)</strong>. Select what to do with these items:
                 </div>
 
-                <div>
-                  <label className="text-xs font-bold text-[#a19284] block mb-1">Reassign items to:</label>
-                  <select
-                    value={deletingCategoryInfo.targetCategory}
-                    onChange={(e) => setDeletingCategoryInfo({ ...deletingCategoryInfo, targetCategory: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-white border border-[#a19284]/40 rounded-xl text-xs font-bold text-[#2e211d]"
-                  >
-                    {settings.menu.categories
-                      .filter((c) => c !== deletingCategoryInfo.categoryName)
-                      .map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                  </select>
-                </div>
+                {settings.menu.categories.filter((c) => c !== deletingCategoryInfo.categoryName).length > 0 ? (
+                  <div>
+                    <label className="text-xs font-bold text-[#a19284] block mb-1">Reassign items to:</label>
+                    <select
+                      value={deletingCategoryInfo.targetCategory}
+                      onChange={(e) => setDeletingCategoryInfo({ ...deletingCategoryInfo, targetCategory: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-white border border-[#a19284]/40 rounded-xl text-xs font-bold text-[#2e211d]"
+                    >
+                      {settings.menu.categories
+                        .filter((c) => c !== deletingCategoryInfo.categoryName)
+                        .map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                ) : null}
 
                 <div className="flex flex-col gap-2 pt-2">
-                  <button
-                    onClick={() => handleConfirmDeleteCategory('MOVE')}
-                    className="w-full py-2.5 bg-[#8c3a27] text-[#f4efe8] font-bold text-xs rounded-xl shadow-md flex items-center justify-center gap-2"
-                  >
-                    <MoveRight className="w-4 h-4" />
-                    <span>Move Items & Delete Category</span>
-                  </button>
+                  {settings.menu.categories.filter((c) => c !== deletingCategoryInfo.categoryName).length > 0 && (
+                    <button
+                      onClick={() => handleConfirmDeleteCategory('MOVE')}
+                      className="w-full py-2.5 bg-[#8c3a27] text-[#f4efe8] font-bold text-xs rounded-xl shadow-md flex items-center justify-center gap-2"
+                    >
+                      <MoveRight className="w-4 h-4" />
+                      <span>Move Items & Delete Category</span>
+                    </button>
+                  )}
                   <button
                     onClick={() => handleConfirmDeleteCategory('DELETE_ITEMS')}
                     className="w-full py-2.5 bg-red-800 text-white font-bold text-xs rounded-xl shadow-md flex items-center justify-center gap-2"
@@ -2559,7 +2557,7 @@ export const SettingsPanel: React.FC = () => {
                 </p>
                 <div className="flex gap-2">
                   <button
-                    onClick={() => handleConfirmDeleteCategory('MOVE')}
+                    onClick={() => handleConfirmDeleteCategory('DELETE_ITEMS')}
                     className="flex-1 py-2.5 bg-red-800 text-white font-bold text-xs rounded-xl shadow-md"
                   >
                     Delete Category

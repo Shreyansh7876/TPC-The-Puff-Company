@@ -85,18 +85,6 @@ class LivePuffStore {
           updated = true;
         }
 
-        if (indexedData.inventory.length > 0 && this.ingredients.length === 0) {
-          this.ingredients = indexedData.inventory;
-          persistentDb.saveInventory(this.ingredients);
-          this.notifyIngredients();
-        }
-
-        if (indexedData.menu.length > 0 && this.menuItems.length === 0) {
-          this.menuItems = indexedData.menu;
-          persistentDb.saveMenu(this.menuItems);
-          this.notifyMenu();
-        }
-
         if (updated) {
           this.notifyOrders();
         }
@@ -182,7 +170,7 @@ class LivePuffStore {
           this.mergeOrdersWithProtection(res.orders);
         }
 
-        if (Array.isArray(res.inventory) && res.inventory.length > 0) {
+        if (Array.isArray(res.inventory)) {
           // If response came from memory fallback cache, do not overwrite local state
           if ((res as any).source !== 'memory_fallback') {
             this.ingredients = res.inventory;
@@ -191,10 +179,12 @@ class LivePuffStore {
           }
         }
 
-        if (Array.isArray(res.menu) && res.menu.length > 0) {
-          this.menuItems = res.menu;
-          persistentDb.saveMenu(this.menuItems);
-          this.notifyMenu();
+        if (Array.isArray(res.menu)) {
+          if ((res as any).source !== 'memory_fallback') {
+            this.menuItems = res.menu;
+            persistentDb.saveMenu(this.menuItems);
+            this.notifyMenu();
+          }
         }
 
         if (res.spreadsheetId) {
@@ -299,28 +289,26 @@ class LivePuffStore {
         .catch(() => null);
 
       if (allRes && allRes.success) {
-        // 1. Menu Items
-        if (Array.isArray(allRes.menu) && allRes.menu.length > 0) {
+        // 1. Menu Items: Empty data IS valid data
+        if (Array.isArray(allRes.menu)) {
           this.menuItems = allRes.menu;
           persistentDb.saveMenu(this.menuItems);
           this.notifyMenu();
         }
 
-        // 2. Categories: protect deleted categories and update list
-        if (Array.isArray(allRes.categories) && allRes.categories.length > 0) {
+        // 2. Categories: protect deleted categories and update list (Empty data IS valid data)
+        if (Array.isArray(allRes.categories)) {
           const catNames = allRes.categories
             .map((c: any) => (typeof c === 'string' ? c.trim() : c.name || c))
             .filter((c: string) => Boolean(c) && !settingsStore.isCategoryDeleted(c));
           
-          if (catNames.length > 0) {
-            settingsStore.updateCategoriesFromRemote(catNames);
-          }
+          settingsStore.updateCategoriesFromRemote(catNames);
         }
 
-        // 3. Raw Inventory: preserve manual stock edits and 0 values
-        if (Array.isArray(allRes.inventory) && allRes.inventory.length > 0) {
-          if (allRes.source === 'memory_fallback' && this.ingredients.length > 0) {
-            console.log('[Inventory Protection] Preserving local inventory, ignoring memory fallback.');
+        // 3. Raw Inventory: preserve manual stock edits and 0 values (Empty data IS valid data)
+        if (Array.isArray(allRes.inventory)) {
+          if (allRes.source === 'memory_fallback' && this.ingredients.length > 0 && allRes.inventory.length === 0) {
+            console.log('[Inventory Protection] Preserving local inventory, ignoring empty memory fallback.');
           } else {
             this.ingredients = allRes.inventory;
             persistentDb.saveInventory(this.ingredients);
