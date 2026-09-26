@@ -19,7 +19,7 @@ const KEYS = {
 
 export interface SyncQueueItem {
   id: string;
-  type: 'ORDER_CREATE' | 'ORDER_STATUS' | 'INVENTORY_UPDATE' | 'MENU_UPDATE' | 'SETTINGS_UPDATE';
+  type: 'ORDER_CREATE' | 'ORDER_STATUS' | 'INVENTORY_UPDATE' | 'MENU_UPDATE' | 'SETTINGS_UPDATE' | 'CATEGORIES_UPDATE';
   payload: any;
   timestamp: string;
   retryCount: number;
@@ -116,9 +116,9 @@ class PersistentDatabaseService {
     if (typeof window === 'undefined') return [...INITIAL_INGREDIENTS];
     try {
       const data = localStorage.getItem(KEYS.INVENTORY);
-      if (data) {
+      if (data !== null) {
         const parsed = JSON.parse(data);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {
       console.warn('Failed to parse inventory from LocalStorage:', e);
@@ -130,9 +130,9 @@ class PersistentDatabaseService {
     if (typeof window === 'undefined') return [...INITIAL_MENU_ITEMS];
     try {
       const data = localStorage.getItem(KEYS.MENU);
-      if (data) {
+      if (data !== null) {
         const parsed = JSON.parse(data);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch (e) {
       console.warn('Failed to parse menu from LocalStorage:', e);

@@ -106,6 +106,9 @@ class LivePuffStore {
       const authRes = await fetch('/api/auth/google/status').then((r) => r.json()).catch(() => ({ authenticated: false }));
       if (authRes.spreadsheetId) {
         this.spreadsheetId = authRes.spreadsheetId;
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('tpc_active_spreadsheet_id', authRes.spreadsheetId);
+        }
       }
       if (authRes.authenticated) {
         this.googleSheetsConnected = true;
@@ -180,9 +183,12 @@ class LivePuffStore {
         }
 
         if (Array.isArray(res.inventory) && res.inventory.length > 0) {
-          this.ingredients = res.inventory;
-          persistentDb.saveInventory(this.ingredients);
-          this.notifyIngredients();
+          // If response came from memory fallback cache, do not overwrite local state
+          if ((res as any).source !== 'memory_fallback') {
+            this.ingredients = res.inventory;
+            persistentDb.saveInventory(this.ingredients);
+            this.notifyIngredients();
+          }
         }
 
         if (Array.isArray(res.menu) && res.menu.length > 0) {
@@ -193,6 +199,9 @@ class LivePuffStore {
 
         if (res.spreadsheetId) {
           this.spreadsheetId = res.spreadsheetId;
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('tpc_active_spreadsheet_id', res.spreadsheetId);
+          }
         }
 
         this.lastSyncedAt = new Date().toLocaleTimeString();
@@ -249,6 +258,24 @@ class LivePuffStore {
           if (res.ok) {
             persistentDb.dequeueMutation(item.id);
           }
+        } else if (item.type === 'CATEGORIES_UPDATE') {
+          const res = await fetch('/api/sheets/categories', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...item.payload, spreadsheetId: this.spreadsheetId })
+          });
+          if (res.ok) {
+            persistentDb.dequeueMutation(item.id);
+          }
+        } else if (item.type === 'SETTINGS_UPDATE') {
+          const res = await fetch('/api/sheets/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...item.payload, spreadsheetId: this.spreadsheetId })
+          });
+          if (res.ok) {
+            persistentDb.dequeueMutation(item.id);
+          }
         }
       } catch (err) {
         console.warn(`Failed to flush queue item ${item.id}:`, err);
@@ -279,17 +306,26 @@ class LivePuffStore {
           this.notifyMenu();
         }
 
-        // 2. Categories
+        // 2. Categories: protect deleted categories and update list
         if (Array.isArray(allRes.categories) && allRes.categories.length > 0) {
-          const catNames = allRes.categories.map((c: any) => c.name || c);
-          settingsStore.updateSection('menu', { categories: catNames });
+          const catNames = allRes.categories
+            .map((c: any) => (typeof c === 'string' ? c.trim() : c.name || c))
+            .filter((c: string) => Boolean(c) && !settingsStore.isCategoryDeleted(c));
+          
+          if (catNames.length > 0) {
+            settingsStore.updateCategoriesFromRemote(catNames);
+          }
         }
 
-        // 3. Raw Inventory
+        // 3. Raw Inventory: preserve manual stock edits and 0 values
         if (Array.isArray(allRes.inventory) && allRes.inventory.length > 0) {
-          this.ingredients = allRes.inventory;
-          persistentDb.saveInventory(this.ingredients);
-          this.notifyIngredients();
+          if (allRes.source === 'memory_fallback' && this.ingredients.length > 0) {
+            console.log('[Inventory Protection] Preserving local inventory, ignoring memory fallback.');
+          } else {
+            this.ingredients = allRes.inventory;
+            persistentDb.saveInventory(this.ingredients);
+            this.notifyIngredients();
+          }
         }
 
         // 4. Orders History with deduplication & protection
@@ -302,13 +338,16 @@ class LivePuffStore {
           customerStore.loadFromGoogleSheets(allRes.customers);
         }
 
-        // 6. Settings
-        if (allRes.settings) {
-          settingsStore.updateSettings(allRes.settings);
+        // 6. Settings (preserve local settings changes and respect deleted categories)
+        if (allRes.settings && typeof allRes.settings === 'object' && Object.keys(allRes.settings).length > 0) {
+          settingsStore.updateSettings(allRes.settings, true);
         }
 
         if (allRes.spreadsheetId) {
           this.spreadsheetId = allRes.spreadsheetId;
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('tpc_active_spreadsheet_id', allRes.spreadsheetId);
+          }
         }
 
         this.googleSheetsConnected = true;
@@ -488,6 +527,10 @@ class LivePuffStore {
   }
 
   // --- PUBLIC GETTERS & SUBSCRIBERS ---
+
+  public getSpreadsheetId(): string | null {
+    return this.spreadsheetId;
+  }
 
   public getMenuItems(): PuffItem[] {
     return [...this.menuItems];

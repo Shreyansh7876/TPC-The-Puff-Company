@@ -443,10 +443,11 @@ export const SettingsPanel: React.FC = () => {
       alert('Category already exists.');
       return;
     }
-    const updated = [...settings.menu.categories, trimmed];
-    settingsStore.updateSection('menu', { categories: updated });
-    setNewCategoryName('');
-    triggerSaveNotification(`Added category "${trimmed}"`);
+    const success = settingsStore.addCategory(trimmed);
+    if (success) {
+      setNewCategoryName('');
+      triggerSaveNotification(`Added category "${trimmed}"`);
+    }
   };
 
   const handleStartEditCategory = (catName: string) => {
@@ -466,14 +467,8 @@ export const SettingsPanel: React.FC = () => {
       return;
     }
 
-    // Update settings categories list
-    const updatedCategories = settings.menu.categories.map((c) => (c === oldName ? trimmedNew : c));
-    settingsStore.updateSection('menu', { categories: updatedCategories });
-
-    // Update default POS category if it matched oldName
-    if (settings.pos.defaultCategory === oldName) {
-      settingsStore.updateSection('pos', { defaultCategory: trimmedNew });
-    }
+    // Rename category permanently in settingsStore (registers tombstone, updates Google Sheets)
+    settingsStore.renameCategory(oldName, trimmedNew);
 
     // Update all menu items in livePuffStore belonging to oldName
     const itemsToUpdate = livePuffStore.getMenuItems().filter((item) => item.category === oldName);
@@ -518,14 +513,8 @@ export const SettingsPanel: React.FC = () => {
       });
     }
 
-    // Update settings categories
-    const updatedCategories = settings.menu.categories.filter((c) => c !== categoryName);
-    settingsStore.updateSection('menu', { categories: updatedCategories });
-
-    // Reset default POS category if needed
-    if (settings.pos.defaultCategory === categoryName) {
-      settingsStore.updateSection('pos', { defaultCategory: updatedCategories[0] || 'General' });
-    }
+    // Permanently delete category (persists tombstone, purges from Google Sheets)
+    settingsStore.deleteCategoryPermanently(categoryName);
 
     setDeletingCategoryInfo(null);
     triggerSaveNotification(
@@ -1943,9 +1932,7 @@ export const SettingsPanel: React.FC = () => {
 
           {/* Grouped Categories and Items Display */}
           {(() => {
-            const allItemCats = Array.from(new Set(menuItems.map((i) => i.category || 'General')));
-            const extraCats = allItemCats.filter((c) => !settings.menu.categories.includes(c));
-            const displayCats = Array.from(new Set([...settings.menu.categories, ...extraCats]));
+            const displayCats = settings.menu.categories;
 
             return (
               <div className="space-y-6">

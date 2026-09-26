@@ -3,6 +3,7 @@ import {
   ActivityLogEntry, 
   InventoryAuditLog
 } from '../types';
+import { persistentDb } from './persistentDb';
 
 const INITIAL_SETTINGS: AppMasterSettings = {
   storeProfile: {
@@ -111,6 +112,7 @@ class SettingsStore {
   private settings: AppMasterSettings = { ...INITIAL_SETTINGS };
   private activityLogs: ActivityLogEntry[] = [];
   private auditLogs: InventoryAuditLog[] = [];
+  private deletedCategories: Set<string> = new Set();
 
   private settingsListeners: Set<Listener<AppMasterSettings>> = new Set();
   private activityLogListeners: Set<Listener<ActivityLogEntry[]>> = new Set();
@@ -124,6 +126,14 @@ class SettingsStore {
     if (typeof window === 'undefined') return;
 
     try {
+      const rawDel = localStorage.getItem('tpc_deleted_categories');
+      if (rawDel) {
+        const parsed = JSON.parse(rawDel);
+        if (Array.isArray(parsed)) {
+          this.deletedCategories = new Set(parsed);
+        }
+      }
+
       const savedSettings = localStorage.getItem('tpc_app_settings');
       if (savedSettings) {
         const parsed = JSON.parse(savedSettings);
@@ -141,9 +151,24 @@ class SettingsStore {
         if (parsed?.billing?.receiptFooterText?.includes('The Puff Company')) {
           parsed.billing.receiptFooterText = parsed.billing.receiptFooterText.replace('The Puff Company', 'The Puff Co.');
         }
+
+        const rawCategories = Array.isArray(parsed.menu?.categories)
+          ? parsed.menu.categories
+          : INITIAL_SETTINGS.menu.categories;
+        const cleanCategories = rawCategories.filter((c: string) => !this.deletedCategories.has(c));
+
         this.settings = { 
           ...INITIAL_SETTINGS, 
           ...parsed,
+          menu: {
+            ...INITIAL_SETTINGS.menu,
+            ...(parsed.menu || {}),
+            categories: cleanCategories.length > 0 ? cleanCategories : (rawCategories.length > 0 ? cleanCategories : ['General'])
+          },
+          inventory: {
+            ...INITIAL_SETTINGS.inventory,
+            ...(parsed.inventory || {})
+          },
           storeProfile: {
             ...INITIAL_SETTINGS.storeProfile,
             ...(parsed.storeProfile || {})
@@ -157,6 +182,8 @@ class SettingsStore {
             ...(parsed.kot || {})
           }
         };
+      } else {
+        this.settings.menu.categories = this.settings.menu.categories.filter((c) => !this.deletedCategories.has(c));
       }
 
       const savedActivityLogs = localStorage.getItem('tpc_activity_logs');
@@ -173,21 +200,157 @@ class SettingsStore {
     }
   }
 
-  private saveToLocalStorage() {
+  private saveToLocalStorage(syncRemote: boolean = true) {
     if (typeof window === 'undefined') return;
     try {
       localStorage.setItem('tpc_app_settings', JSON.stringify(this.settings));
       localStorage.setItem('tpc_activity_logs', JSON.stringify(this.activityLogs.slice(0, 100)));
       localStorage.setItem('tpc_audit_logs', JSON.stringify(this.auditLogs.slice(0, 200)));
 
-      // Sync settings to backend database
-      fetch('/api/store/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ settings: this.settings })
-      }).catch(() => {});
+      if (syncRemote) {
+        this.syncSettingsToGoogleSheets();
+      }
     } catch (e) {
       console.error('Failed to write settings to localStorage:', e);
+    }
+  }
+
+  public getActiveSpreadsheetId(): string | null {
+    if (typeof window === 'undefined') return null;
+    return localStorage.getItem('tpc_active_spreadsheet_id') || null;
+  }
+
+  public syncSettingsToGoogleSheets() {
+    const spreadsheetId = this.getActiveSpreadsheetId();
+    // 1. Write to Sheets Settings_Config tab
+    fetch('/api/sheets/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: this.settings, spreadsheetId })
+    }).catch(() => {
+      persistentDb.enqueueMutation({
+        type: 'SETTINGS_UPDATE',
+        payload: { settings: this.settings }
+      });
+    });
+
+    // 2. Mirror in backend memory cache
+    fetch('/api/store/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: this.settings, spreadsheetId })
+    }).catch(() => {});
+  }
+
+  public syncCategoriesToGoogleSheets(categories: string[], categoryName?: string, action?: 'add' | 'delete') {
+    const spreadsheetId = this.getActiveSpreadsheetId();
+    fetch('/api/sheets/categories', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        categories, 
+        category: categoryName ? { name: categoryName } : undefined, 
+        action, 
+        spreadsheetId 
+      })
+    }).catch(() => {
+      persistentDb.enqueueMutation({
+        type: 'CATEGORIES_UPDATE',
+        payload: { 
+          categories, 
+          category: categoryName ? { name: categoryName } : undefined, 
+          action 
+        }
+      });
+    });
+  }
+
+  public isCategoryDeleted(name: string): boolean {
+    return this.deletedCategories.has(name);
+  }
+
+  public deleteCategoryPermanently(categoryName: string): void {
+    const trimmed = categoryName.trim();
+    this.deletedCategories.add(trimmed);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('tpc_deleted_categories', JSON.stringify(Array.from(this.deletedCategories)));
+    }
+
+    const updated = this.settings.menu.categories.filter((c) => c !== trimmed);
+    this.settings.menu.categories = updated;
+
+    if (this.settings.pos.defaultCategory === trimmed) {
+      this.settings.pos.defaultCategory = updated[0] || 'General';
+    }
+
+    this.saveToLocalStorage(true);
+    this.syncCategoriesToGoogleSheets(updated, trimmed, 'delete');
+    this.notifySettings();
+    this.logActivity('Category Deleted', `Permanently deleted category "${trimmed}"`);
+  }
+
+  public addCategory(categoryName: string): boolean {
+    const trimmed = categoryName.trim();
+    if (!trimmed) return false;
+
+    // Un-tombstone if previously deleted
+    this.deletedCategories.delete(trimmed);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('tpc_deleted_categories', JSON.stringify(Array.from(this.deletedCategories)));
+    }
+
+    if (this.settings.menu.categories.includes(trimmed)) return false;
+
+    const updated = [...this.settings.menu.categories, trimmed];
+    this.settings.menu.categories = updated;
+
+    this.saveToLocalStorage(true);
+    this.syncCategoriesToGoogleSheets(updated, trimmed, 'add');
+    this.notifySettings();
+    this.logActivity('Category Added', `Added new category "${trimmed}"`);
+    return true;
+  }
+
+  public renameCategory(oldName: string, newName: string): boolean {
+    const trimmedOld = oldName.trim();
+    const trimmedNew = newName.trim();
+    if (!trimmedNew || trimmedOld === trimmedNew) return false;
+
+    this.deletedCategories.add(trimmedOld);
+    this.deletedCategories.delete(trimmedNew);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('tpc_deleted_categories', JSON.stringify(Array.from(this.deletedCategories)));
+    }
+
+    const updated = this.settings.menu.categories.map((c) => (c === trimmedOld ? trimmedNew : c));
+    this.settings.menu.categories = updated;
+
+    if (this.settings.pos.defaultCategory === trimmedOld) {
+      this.settings.pos.defaultCategory = trimmedNew;
+    }
+
+    this.saveToLocalStorage(true);
+    this.syncCategoriesToGoogleSheets(updated);
+    this.notifySettings();
+    this.logActivity('Category Renamed', `Renamed category "${trimmedOld}" to "${trimmedNew}"`);
+    return true;
+  }
+
+  public updateCategoriesFromRemote(remoteCategories: string[]): void {
+    if (!Array.isArray(remoteCategories)) return;
+    const clean = remoteCategories
+      .map((c) => (typeof c === 'string' ? c.trim() : ''))
+      .filter((c) => Boolean(c) && !this.deletedCategories.has(c));
+
+    if (clean.length === 0) return;
+
+    // Check if distinct from current
+    const currentStr = JSON.stringify(this.settings.menu.categories);
+    const newStr = JSON.stringify(clean);
+    if (currentStr !== newStr) {
+      this.settings.menu.categories = clean;
+      this.saveToLocalStorage(false);
+      this.notifySettings();
     }
   }
 
@@ -201,24 +364,42 @@ class SettingsStore {
     return () => this.settingsListeners.delete(listener);
   }
 
-  public updateSettings(partial: Partial<AppMasterSettings>) {
+  public updateSettings(partial: Partial<AppMasterSettings>, fromRemote: boolean = false) {
+    let cleanMenu = partial.menu ? { ...this.settings.menu, ...partial.menu } : this.settings.menu;
+    if (cleanMenu.categories) {
+      cleanMenu.categories = cleanMenu.categories.filter((c) => !this.deletedCategories.has(c));
+    }
+
     this.settings = {
       ...this.settings,
       ...partial,
+      menu: cleanMenu,
+      inventory: partial.inventory ? { ...this.settings.inventory, ...partial.inventory } : this.settings.inventory,
     };
-    this.saveToLocalStorage();
+    this.saveToLocalStorage(!fromRemote);
     this.notifySettings();
-    this.logActivity('Settings Update', 'Updated application settings');
+    if (!fromRemote) {
+      this.logActivity('Settings Update', 'Updated application settings');
+    }
   }
 
-  public updateSection<K extends keyof AppMasterSettings>(section: K, value: Partial<AppMasterSettings[K]>) {
+  public updateSection<K extends keyof AppMasterSettings>(section: K, value: Partial<AppMasterSettings[K]>, fromRemote: boolean = false) {
+    if (section === 'menu' && (value as any).categories) {
+      (value as any).categories = ((value as any).categories as string[]).filter((c: string) => !this.deletedCategories.has(c));
+    }
+
     this.settings[section] = {
       ...this.settings[section],
       ...value,
     };
-    this.saveToLocalStorage();
+    this.saveToLocalStorage(!fromRemote);
     this.notifySettings();
-    this.logActivity('Settings Update', `Updated ${String(section)} configuration`);
+    if (!fromRemote) {
+      this.logActivity('Settings Update', `Updated ${String(section)} configuration`);
+      if (section === 'menu' && (value as any).categories) {
+        this.syncCategoriesToGoogleSheets((value as any).categories);
+      }
+    }
   }
 
   private notifySettings() {

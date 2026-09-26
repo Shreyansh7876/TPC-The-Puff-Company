@@ -49,9 +49,9 @@ const INITIAL_MENU_ITEMS = [
 
 // Ephemeral in-memory fallback cache (NO local disk file dependencies)
 const memoryStore = {
-  menu: [...INITIAL_MENU_ITEMS],
-  categories: [...INITIAL_CATEGORIES],
-  inventory: [...INITIAL_INGREDIENTS],
+  menu: [] as any[],
+  categories: [] as any[],
+  inventory: [] as any[],
   orders: [] as any[],
   customers: {} as Record<string, any>,
   settings: null as any,
@@ -623,14 +623,20 @@ app.post('/api/sheets/init', async (req, res) => {
     memoryStore.spreadsheetId = spreadsheetId;
     await ensureSpreadsheetStructure(sheets, spreadsheetId);
 
-    // Check if Menu_Items has data; if empty, seed default menu, categories, and inventory
+    // Only seed defaults if the spreadsheet is completely fresh (all tabs empty)
     try {
-      const menuCheck = await sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${SHEET_NAMES.MENU}!A2:B2`
-      });
-      const hasMenuData = menuCheck.data.values && menuCheck.data.values.length > 0;
-      if (!hasMenuData) {
+      const [menuCheck, catCheck, invCheck] = await Promise.all([
+        sheets.spreadsheets.values.get({ spreadsheetId, range: `${SHEET_NAMES.MENU}!A2:B2` }).catch(() => ({ data: { values: [] } })),
+        sheets.spreadsheets.values.get({ spreadsheetId, range: `${SHEET_NAMES.CATEGORIES}!A2:B2` }).catch(() => ({ data: { values: [] } })),
+        sheets.spreadsheets.values.get({ spreadsheetId, range: `${SHEET_NAMES.INVENTORY}!A2:B2` }).catch(() => ({ data: { values: [] } })),
+      ]);
+
+      const hasMenuData = menuCheck.data?.values && menuCheck.data.values.length > 0;
+      const hasCatData = catCheck.data?.values && catCheck.data.values.length > 0;
+      const hasInvData = invCheck.data?.values && invCheck.data.values.length > 0;
+
+      // Only seed initial defaults if the spreadsheet has zero data in all three master tabs
+      if (!hasMenuData && !hasCatData && !hasInvData) {
         // Seed initial menu
         const menuRows = INITIAL_MENU_ITEMS.map((item) => [
           item.id,
@@ -711,9 +717,9 @@ app.get('/api/sheets/all', async (req, res) => {
     return res.json({
       success: true,
       source: 'memory_cache',
-      menu: memoryStore.menu,
-      categories: memoryStore.categories,
-      inventory: memoryStore.inventory,
+      menu: memoryStore.menu.length > 0 ? memoryStore.menu : INITIAL_MENU_ITEMS,
+      categories: memoryStore.categories.length > 0 ? memoryStore.categories : INITIAL_CATEGORIES,
+      inventory: memoryStore.inventory.length > 0 ? memoryStore.inventory : INITIAL_INGREDIENTS,
       orders: memoryStore.orders,
       customers: memoryStore.customers,
       settings: memoryStore.settings,
@@ -735,58 +741,71 @@ app.get('/api/sheets/all', async (req, res) => {
     ]);
 
     // Parse Menu
-    const menu = (menuRes.data.values || []).map((row: any[]) => ({
-      id: row[0] || 'p_' + Math.random().toString(36).substring(2, 7),
-      name: row[1] || 'Item',
-      category: row[2] || 'Classic & Single Flavor Puffs',
-      price: parseFloat(row[3]) || 0,
-      isVeg: row[4] !== 'FALSE',
-      description: row[5] || '',
-      isAvailable: row[6] !== 'FALSE',
-      image: row[7] || puffImg,
-      recipe: row[8] ? JSON.parse(row[8]) : []
-    }));
+    const menu = (menuRes.data.values || [])
+      .filter((row: any[]) => row && row[0])
+      .map((row: any[]) => ({
+        id: row[0] || 'p_' + Math.random().toString(36).substring(2, 7),
+        name: row[1] || 'Item',
+        category: row[2] || 'Classic & Single Flavor Puffs',
+        price: parseFloat(row[3]) || 0,
+        isVeg: row[4] !== 'FALSE',
+        description: row[5] || '',
+        isAvailable: row[6] !== 'FALSE',
+        image: row[7] || puffImg,
+        recipe: row[8] ? JSON.parse(row[8]) : []
+      }));
 
-    // Parse Categories
-    const categories = (catRes.data.values || []).map((row: any[]) => ({
-      id: row[0] || 'cat_' + Math.random().toString(36).substring(2, 7),
-      name: row[1] || 'Category',
-      sortOrder: parseInt(row[2], 10) || 1,
-      isActive: row[3] !== 'FALSE'
-    }));
+    // Parse Categories (respecting existing categories in sheet, never reviving deleted)
+    const categories = (catRes.data.values || [])
+      .filter((row: any[]) => row && row[1])
+      .map((row: any[], idx: number) => ({
+        id: row[0] || 'cat_' + (idx + 1),
+        name: row[1] || 'Category',
+        sortOrder: parseInt(row[2], 10) || (idx + 1),
+        isActive: row[3] !== 'FALSE'
+      }));
 
-    // Parse Inventory
-    const inventory = (invRes.data.values || []).map((row: any[]) => ({
-      id: row[0] || 'ing_' + Math.random().toString(36).substring(2, 7),
-      name: row[1] || 'Material',
-      unit: row[2] || 'grams',
-      currentStock: parseFloat(row[3]) || 0,
-      minStockAlert: parseFloat(row[4]) || 50,
-      costPerUnit: parseFloat(row[5]) || 0.1,
-      category: row[6] || 'Raw Materials'
-    }));
+    // Parse Inventory: accurately parse numbers so stock of 0 stays exactly 0!
+    const inventory = (invRes.data.values || [])
+      .filter((row: any[]) => row && row[0])
+      .map((row: any[]) => {
+        const rawStock = row[3];
+        const parsedStock = parseFloat(rawStock);
+        const currentStock = !isNaN(parsedStock) ? parsedStock : 0;
+        return {
+          id: row[0] || 'ing_' + Math.random().toString(36).substring(2, 7),
+          name: row[1] || 'Material',
+          unit: row[2] || 'grams',
+          currentStock,
+          minStockAlert: !isNaN(parseFloat(row[4])) ? parseFloat(row[4]) : 50,
+          costPerUnit: !isNaN(parseFloat(row[5])) ? parseFloat(row[5]) : 0.1,
+          category: row[6] || 'Raw Materials'
+        };
+      });
 
     // Parse Orders
-    const orders = (ordersRes.data.values || []).map((row: any[]) => ({
-      id: row[0],
-      invoiceNo: row[1] || undefined,
-      tokenNo: parseInt(row[2], 10) || 101,
-      orderType: row[3] || 'Dine In',
-      customerName: row[4] || '',
-      customerMobile: row[5] || '',
-      subtotal: parseFloat(row[6]) || 0,
-      gstAmount: parseFloat(row[7]) || 0,
-      discount: parseFloat(row[8]) || 0,
-      total: parseFloat(row[9]) || 0,
-      paymentMode: row[10] || 'CASH',
-      status: row[11] || 'COMPLETED',
-      customerNotes: row[12] || '',
-      staffName: row[13] || 'Cashier',
-      deviceType: row[14] || 'mobile',
-      createdAt: row[15] || new Date().toISOString(),
-      cancelledAt: row[16] || undefined,
-      items: row[17] ? JSON.parse(row[17]) : []
-    })).sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    const orders = (ordersRes.data.values || [])
+      .filter((row: any[]) => row && row[0])
+      .map((row: any[]) => ({
+        id: row[0],
+        invoiceNo: row[1] || undefined,
+        tokenNo: parseInt(row[2], 10) || 101,
+        orderType: row[3] || 'Dine In',
+        customerName: row[4] || '',
+        customerMobile: row[5] || '',
+        subtotal: parseFloat(row[6]) || 0,
+        gstAmount: parseFloat(row[7]) || 0,
+        discount: parseFloat(row[8]) || 0,
+        total: parseFloat(row[9]) || 0,
+        paymentMode: row[10] || 'CASH',
+        status: row[11] || 'COMPLETED',
+        customerNotes: row[12] || '',
+        staffName: row[13] || 'Cashier',
+        deviceType: row[14] || 'mobile',
+        createdAt: row[15] || new Date().toISOString(),
+        cancelledAt: row[16] || undefined,
+        items: row[17] ? JSON.parse(row[17]) : []
+      })).sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
     // Parse Customers
     const customersMap: Record<string, any> = {};
@@ -817,9 +836,9 @@ app.get('/api/sheets/all', async (req, res) => {
       }
     });
 
-    // Update in-memory cache
+    // Update in-memory cache directly with genuine Google Sheets rows
     if (menu.length > 0) memoryStore.menu = menu;
-    if (categories.length > 0) memoryStore.categories = categories;
+    memoryStore.categories = categories;
     if (inventory.length > 0) memoryStore.inventory = inventory;
     if (orders.length > 0) memoryStore.orders = orders;
     if (Object.keys(customersMap).length > 0) memoryStore.customers = customersMap;
@@ -828,10 +847,10 @@ app.get('/api/sheets/all', async (req, res) => {
     return res.json({
       success: true,
       source: 'google_sheets_master',
-      menu: memoryStore.menu,
-      categories: memoryStore.categories,
-      inventory: memoryStore.inventory,
-      orders: memoryStore.orders,
+      menu,
+      categories,
+      inventory,
+      orders,
       customers: memoryStore.customers,
       settings: memoryStore.settings,
       spreadsheetId
@@ -1346,15 +1365,22 @@ app.get('/api/sheets/inventory', async (req, res) => {
     });
 
     const rows = response.data.values || [];
-    const inventory = rows.map((row) => ({
-      id: row[0] || 'ing_' + Math.random().toString(36).substring(2, 7),
-      name: row[1] || 'Material',
-      unit: row[2] || 'grams',
-      currentStock: parseFloat(row[3]) || 0,
-      minStockAlert: parseFloat(row[4]) || 50,
-      costPerUnit: parseFloat(row[5]) || 0.1,
-      category: row[6] || 'Raw Materials'
-    }));
+    const inventory = rows
+      .filter((row) => row && row[0])
+      .map((row) => {
+        const rawStock = row[3];
+        const parsedStock = parseFloat(rawStock);
+        const currentStock = !isNaN(parsedStock) ? parsedStock : 0;
+        return {
+          id: row[0] || 'ing_' + Math.random().toString(36).substring(2, 7),
+          name: row[1] || 'Material',
+          unit: row[2] || 'grams',
+          currentStock,
+          minStockAlert: !isNaN(parseFloat(row[4])) ? parseFloat(row[4]) : 50,
+          costPerUnit: !isNaN(parseFloat(row[5])) ? parseFloat(row[5]) : 0.1,
+          category: row[6] || 'Raw Materials'
+        };
+      });
 
     if (inventory.length > 0) memoryStore.inventory = inventory;
     return res.json({ inventory: memoryStore.inventory, source: 'google_sheets' });
@@ -1428,14 +1454,16 @@ app.get('/api/sheets/categories', async (req, res) => {
     });
 
     const rows = response.data.values || [];
-    const categories = rows.map((row) => ({
-      id: row[0] || 'cat_' + Math.random().toString(36).substring(2, 7),
-      name: row[1] || 'Category',
-      sortOrder: parseInt(row[2], 10) || 1,
-      isActive: row[3] !== 'FALSE'
-    }));
+    const categories = rows
+      .filter((row) => row && row[1])
+      .map((row, idx) => ({
+        id: row[0] || 'cat_' + (idx + 1),
+        name: row[1],
+        sortOrder: parseInt(row[2], 10) || (idx + 1),
+        isActive: row[3] !== 'FALSE'
+      }));
 
-    if (categories.length > 0) memoryStore.categories = categories;
+    memoryStore.categories = categories;
     return res.json({ categories: memoryStore.categories, source: 'google_sheets' });
   } catch (e: any) {
     return res.json({ categories: memoryStore.categories, source: 'memory_fallback', error: e?.message });
@@ -1448,16 +1476,31 @@ app.post('/api/sheets/categories', async (req, res) => {
   const auth = getGoogleAuthClient(req);
 
   if (Array.isArray(categories)) {
-    memoryStore.categories = categories;
+    memoryStore.categories = categories.map((c: any, idx: number) => {
+      if (typeof c === 'string') {
+        return { id: 'cat_' + (idx + 1), name: c.trim(), sortOrder: idx + 1, isActive: true };
+      }
+      return {
+        id: c.id || ('cat_' + (idx + 1)),
+        name: (c.name || String(c)).trim(),
+        sortOrder: c.sortOrder || (idx + 1),
+        isActive: c.isActive !== false
+      };
+    });
   } else if (category) {
+    const catName = typeof category === 'string' ? category.trim() : (category.name || '').trim();
+    const catId = typeof category === 'string' ? undefined : category.id;
     if (action === 'delete') {
-      memoryStore.categories = memoryStore.categories.filter((c) => c.id !== category.id && c.name !== category.name);
+      memoryStore.categories = memoryStore.categories.filter((c) => c.name !== catName && (!catId || c.id !== catId));
     } else {
-      const idx = memoryStore.categories.findIndex((c) => c.id === category.id || c.name === category.name);
+      const idx = memoryStore.categories.findIndex((c) => (catId && c.id === catId) || c.name === catName);
+      const catObj = typeof category === 'string'
+        ? { id: 'cat_' + (memoryStore.categories.length + 1), name: catName, sortOrder: memoryStore.categories.length + 1, isActive: true }
+        : { ...category, name: catName };
       if (idx !== -1) {
-        memoryStore.categories[idx] = { ...memoryStore.categories[idx], ...category };
+        memoryStore.categories[idx] = { ...memoryStore.categories[idx], ...catObj };
       } else {
-        memoryStore.categories.push(category);
+        memoryStore.categories.push(catObj);
       }
     }
   }
@@ -1465,19 +1508,21 @@ app.post('/api/sheets/categories', async (req, res) => {
   if (spreadsheetId && auth) {
     try {
       const sheets = google.sheets({ version: 'v4', auth });
-      const rows = memoryStore.categories.map((c) => [
-        c.id,
+      const rows = memoryStore.categories.map((c, idx) => [
+        c.id || ('cat_' + (idx + 1)),
         c.name,
-        c.sortOrder || 1,
+        c.sortOrder || (idx + 1),
         c.isActive ? 'TRUE' : 'FALSE'
       ]);
       await sheets.spreadsheets.values.clear({ spreadsheetId, range: `${SHEET_NAMES.CATEGORIES}!A2:D` });
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: `${SHEET_NAMES.CATEGORIES}!A2`,
-        valueInputOption: 'USER_ENTERED',
-        requestBody: { values: rows }
-      });
+      if (rows.length > 0) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId,
+          range: `${SHEET_NAMES.CATEGORIES}!A2`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: rows }
+        });
+      }
     } catch (e) {
       console.error('Error saving categories to Google Sheets:', e);
     }
@@ -1796,8 +1841,34 @@ app.post('/api/store/sync', (req, res) => {
   }
 });
 
-app.post('/api/store/settings', (req, res) => {
-  if (req.body.settings) memoryStore.settings = req.body.settings;
+app.post('/api/store/settings', async (req, res) => {
+  const { settings } = req.body;
+  if (settings) memoryStore.settings = settings;
+
+  const spreadsheetId = resolveSpreadsheetId(req);
+  const auth = getGoogleAuthClient(req);
+
+  if (spreadsheetId && auth && settings) {
+    try {
+      const sheets = google.sheets({ version: 'v4', auth });
+      await sheets.spreadsheets.values.clear({ spreadsheetId, range: `${SHEET_NAMES.SETTINGS}!A2:C` });
+      await sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: `${SHEET_NAMES.SETTINGS}!A2`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: {
+          values: [[
+            'APP_MASTER_SETTINGS',
+            JSON.stringify(settings),
+            new Date().toISOString()
+          ]]
+        }
+      });
+    } catch (e) {
+      console.error('Error saving settings to Google Sheets from /api/store/settings:', e);
+    }
+  }
+
   return res.json({ success: true, settings: memoryStore.settings });
 });
 
